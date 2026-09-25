@@ -14,4 +14,4 @@ Iniziare dalla [mappa end-to-end](diagrams/powerseven-end-to-end.html): è la vi
 
 Documentazione: [architettura](docs/architecture.md) · [servizi](docs/services.md) · [Active Directory](docs/active-directory.md) · [DNS](docs/dns.md) · [Docker](docs/docker.md) · [database](docs/databases.md) · [monitoraggio](docs/monitoring-wazuh.md) · [accesso remoto](docs/remote-access.md) · [operazioni](docs/operations.md) · [sicurezza](docs/security.md) · [disaster recovery](docs/disaster-recovery.md) · [troubleshooting](docs/troubleshooting.md).
 
-Nessuna credenziale, chiave privata, token o file `.env` è incluso.
+Nessuna credenziale, chiave privata, token o file `.env` è incluso. 
