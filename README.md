@@ -124,6 +124,9 @@ Wazuh è centralizzato su VPS14 con Manager, Indexer e Dashboard. VPS12 e DC02 i
 | Sicurezza | [docs/security.md](docs/security.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Disaster recovery | [docs/disaster-recovery.md](docs/disaster-recovery.md) |
+| Knowledge graph | [graph/README.md](graph/README.md) |
+| Modello IaC locale | [iac/README.md](iac/README.md) |
+| Azure exit plan | [docs/azure-exit-plan.md](docs/azure-exit-plan.md) |
 
 ## Struttura repository
 
@@ -144,7 +147,14 @@ PowerSeven/
 │   ├── operations.md
 │   ├── security.md
 │   ├── troubleshooting.md
-│   └── disaster-recovery.md
+│   ├── disaster-recovery.md
+│   └── azure-exit-plan.md
+├── graph/
+│   ├── README.md
+│   └── powerseven.graph.json
+├── iac/
+│   ├── README.md
+│   └── inventory/
 └── diagrams/
     ├── powerseven-end-to-end.*
     ├── architecture-overview.*

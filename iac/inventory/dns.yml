@@ -1,0 +1,65 @@
+schema_version: 1
+source_graph: ../../graph/powerseven.graph.json
+zones:
+  - name: lab.test
+    kind: active_directory_integrated
+    authoritative_service: id_dns_dc02
+    records:
+      - name: dc02
+        type: A
+        address: 10.10.10.13
+      - name: cloud
+        type: A
+        address: 10.10.10.14
+      - name: git
+        type: A
+        address: 10.10.10.14
+      - name: login
+        type: A
+        address: 10.10.10.14
+      - name: panel
+        type: A
+        address: 10.10.10.14
+      - name: pdf
+        type: A
+        address: 10.10.10.14
+      - name: scribble
+        type: A
+        address: 10.10.10.14
+      - name: scribble-2
+        type: A
+        address: 10.10.10.14
+      - name: wazuh
+        type: A
+        address: 10.10.10.14
+      - name: wings
+        type: A
+        address: 10.10.10.14
+      - name: adguard
+        type: A
+        address: 10.10.10.14
+    state: observed
+    migration: export_records_then_recreate_after_ad
+  - name: _msdcs.lab.test
+    kind: active_directory_integrated
+    authoritative_service: id_dns_dc02
+    state: observed
+    migration: recreate_from_new_domain_controller_or_restore_authoritative_state
+  - name: reverse-local
+    kind: reverse_dns
+    authoritative_service: id_dns_dc02
+    state: observed
+    migration: inventory_reverse_records_before_rebuild
+resolver_chain:
+  - client: vps12
+    resolver: 10.10.10.13
+    purpose: domain_and_internal_dns
+  - client: vps13
+    resolver: 127.0.0.1
+    forwarder: 10.10.10.14
+  - client: id_dns_dc02
+    forwarder: app_adguard
+    address: 10.10.10.14
+  - client: app_adguard
+    upstream: internet
+    state: upstreams_unverified

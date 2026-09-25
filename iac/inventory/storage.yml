@@ -1,0 +1,87 @@
+schema_version: 1
+source_graph: ../../graph/powerseven.graph.json
+storage:
+  - graph_id: pd_ad_system_state
+    host: vps13
+    kind: identity_state
+    data: [NTDS, SYSVOL, AD-integrated-DNS]
+    source_paths: REQUIRED_DISCOVERY
+    migration: system_state_backup_or_documented_domain_rebuild
+    persistent: true
+    recreatable: false
+    backup_required: true
+  - graph_id: pd_wireguard_keys
+    host: vps14
+    kind: configuration_secret
+    data: [server_private_key, peer_private_keys, peer_public_keys, allowed_ips]
+    source_paths: /etc/wireguard
+    migration: secure_export_then_reissue_if_policy_allows
+    persistent: true
+    recreatable: false
+    backup_required: true
+    secret_refs: [wireguard_server_private_key, wireguard_peer_config]
+  - graph_id: pd_nextcloud
+    host: vps14
+    kind: application_data
+    data: [files, config, PostgreSQL_nextcloud, Redis_state_if_required]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: backup_restore_and_application_consistency_check
+    persistent: true
+    recreatable: false
+    backup_required: true
+  - graph_id: pd_forgejo
+    host: vps14
+    kind: application_data
+    data: [git_repositories, attachments, Forgejo_config, PostgreSQL_forgejo]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: repository_export_or_backup_restore_then_integrity_check
+    persistent: true
+    recreatable: false
+    backup_required: true
+  - graph_id: datastore_postgresql
+    host: vps14
+    kind: database_data
+    source: db_postgresql
+    data: [azienda_lab, forgejo, nextcloud, postgres, roles, grants]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: logical_dump_restore_first
+    persistent: true
+    recreatable: false
+    backup_required: true
+    secret_refs: [postgres_admin_password, application_database_passwords]
+  - graph_id: datastore_mariadb
+    host: vps14
+    kind: database_data
+    source: db_mariadb
+    data: [panel, users, grants]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: logical_dump_restore_first
+    persistent: true
+    recreatable: false
+    backup_required: true
+    secret_refs: [mariadb_admin_password, pterodactyl_database_password]
+  - graph_id: datastore_wazuh
+    host: vps14
+    kind: monitoring_data
+    data: [manager_config, indexer_data, dashboard_config, certificates]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: decide_history_retention_then_restore_or_reindex
+    persistent: true
+    recreatable: false
+    backup_required: true
+    secret_refs: [wazuh_certificates, wazuh_credentials]
+  - graph_id: datastore_docker_volumes
+    host: vps14
+    kind: container_data
+    data: [adguard, nextcloud, forgejo, stirling, redis]
+    source_paths: REQUIRED_DISCOVERY
+    destination: local_vps14
+    migration: inventory_compose_mounts_then_backup_restore
+    persistent: true
+    recreatable: false
+    backup_required: true

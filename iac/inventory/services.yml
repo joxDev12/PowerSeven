@@ -1,0 +1,293 @@
+schema_version: 1
+source_graph: ../../graph/powerseven.graph.json
+services:
+  - graph_id: svc_wireguard_vps12
+    host: vps12
+    kind: system
+    name: WireGuard peer wg-final
+    ports: []
+    depends_on: [svc_wireguard_hub]
+    persistent: true
+    secret_refs: [wireguard_vps12_private_key, wireguard_peer_config]
+  - graph_id: svc_wireguard_vps13
+    host: vps13
+    kind: system
+    name: WireGuard peer Lab-Final
+    ports: []
+    depends_on: [svc_wireguard_hub]
+    persistent: true
+    secret_refs: [wireguard_vps13_private_key, wireguard_peer_config]
+  - graph_id: svc_wireguard_hub
+    host: vps14
+    kind: system
+    name: WireGuard HUB
+    unit: wireguard@wg-final
+    ports: [51820/udp]
+    persistent: true
+    secret_refs: [wireguard_server_private_key, wireguard_peer_config]
+    provision_after: [vps14_os]
+  - graph_id: svc_ssh_vps12
+    host: vps12
+    kind: system
+    name: OpenSSH
+    ports: [22/tcp]
+    persistent: false
+    secret_refs: [ssh_host_keys, admin_ssh_authorized_keys]
+  - graph_id: svc_xfce
+    host: vps12
+    kind: desktop_session
+    name: XFCE/LightDM/Xorg
+    depends_on: [svc_sssd]
+    persistent: false
+  - graph_id: svc_ssh_vps14
+    host: vps14
+    kind: system
+    name: OpenSSH
+    ports: [22/tcp]
+    persistent: false
+    secret_refs: [ssh_host_keys, admin_ssh_authorized_keys]
+  - graph_id: svc_xrdp
+    host: vps12
+    kind: system
+    name: XRDP
+    unit: xrdp
+    ports: [3389/tcp]
+    depends_on: [svc_xfce, svc_sssd]
+    persistent: false
+  - graph_id: svc_sssd
+    host: vps12
+    kind: system
+    name: SSSD
+    depends_on: [id_dns_dc02, id_kerberos, id_ldap]
+    persistent: true
+    secret_refs: [domain_join_password]
+  - graph_id: id_ad_ds
+    host: vps13
+    kind: windows-role
+    name: Active Directory Domain Services
+    domain: LAB.TEST
+    depends_on: [vps13_os]
+    persistent: true
+    secret_refs: [domain_safe_mode_password, domain_admin_password]
+  - graph_id: id_dns_dc02
+    host: vps13
+    kind: windows-role
+    name: DNS
+    ports: [53/tcp, 53/udp]
+    depends_on: [id_ad_ds]
+    forwards_to: [app_adguard]
+    persistent: true
+  - graph_id: id_kerberos
+    host: vps13
+    kind: identity
+    name: Kerberos KDC
+    ports: [88/tcp, 88/udp]
+    depends_on: [id_ad_ds, id_dns_dc02]
+  - graph_id: id_ldap
+    host: vps13
+    kind: identity
+    name: LDAP
+    ports: [389/tcp]
+    depends_on: [id_ad_ds]
+  - graph_id: id_ldaps
+    host: vps13
+    kind: identity
+    name: LDAPS
+    ports: [636/tcp]
+    depends_on: [id_ad_ds, cfg_lab_certificates]
+    secret_refs: [ldaps_certificate_private_key]
+  - graph_id: svc_nginx
+    host: vps14
+    kind: reverse_proxy
+    name: Nginx
+    units: [nginx]
+    ports: [80/tcp, 443/tcp]
+    proxies_to: [app_nextcloud, app_forgejo, app_stirling, app_adguard, app_portal, app_pterodactyl, svc_wings, app_scribble]
+    uses_certificate: cert_soc_lab_ca
+    depends_on: [svc_wireguard_hub, cfg_lab_certificates]
+  - graph_id: svc_docker
+    host: vps14
+    kind: runtime
+    name: Docker Engine
+    depends_on: [vps14_os]
+    persistent: true
+  - graph_id: app_adguard
+    host: vps14
+    kind: application
+    name: AdGuard Home
+    dns_name: adguard.lab.test
+    depends_on: [id_dns_dc02, svc_docker]
+    container: container_adguard
+  - graph_id: app_nextcloud
+    host: vps14
+    kind: application
+    name: Nextcloud
+    dns_name: cloud.lab.test
+    auth: LDAP/LDAPS target; runtime setting unverified
+    depends_on: [id_ldap, db_postgresql, container_nextcloud_redis]
+    container: container_nextcloud_app
+  - graph_id: app_forgejo
+    host: vps14
+    kind: application
+    name: Forgejo
+    dns_name: git.lab.test
+    auth: LDAP/LDAPS target; runtime setting unverified
+    depends_on: [id_ldap, db_postgresql]
+    container: container_forgejo
+  - graph_id: app_stirling
+    host: vps14
+    kind: application
+    name: Stirling PDF
+    dns_name: pdf.lab.test
+    depends_on: [svc_docker]
+    container: container_stirling
+  - graph_id: db_postgresql
+    host: vps14
+    kind: database
+    name: PostgreSQL
+    version_observed: "18.6"
+    listen: [127.0.0.1:5432, 10.10.10.14:5432]
+    databases: [azienda_lab, forgejo, nextcloud, postgres]
+    persistent: true
+    secret_refs: [postgres_admin_password, application_database_passwords]
+  - graph_id: db_mariadb
+    host: vps14
+    kind: database
+    name: MariaDB
+    version_observed: "10.11.14"
+    listen: [127.0.0.1:3306]
+    databases: [panel]
+    persistent: true
+    secret_refs: [mariadb_admin_password, pterodactyl_database_password]
+  - graph_id: db_redis
+    host: vps14
+    kind: datastore
+    name: Redis
+    listen: [127.0.0.1:6379]
+    persistent: true
+    secret_refs: [redis_acl_or_password]
+  - graph_id: container_adguard
+    host: vps14
+    kind: container
+    container_name: soc-adguard-adguard-1
+    application: app_adguard
+    network: soc-adguard_default
+    ports: [10.10.10.14:53/tcp, 10.10.10.14:53/udp, 127.0.0.1:3002/tcp]
+    volumes: [adguard_config, adguard_work]
+  - graph_id: container_nextcloud_app
+    host: vps14
+    kind: container
+    application: app_nextcloud
+    network: soc-cloud_cloudnet
+    ports: [127.0.0.1:8083:80/tcp]
+    depends_on: [db_postgresql, container_nextcloud_redis]
+    volumes: [nextcloud_data, nextcloud_config]
+  - graph_id: container_nextcloud_cron
+    host: vps14
+    kind: container
+    application: app_nextcloud
+    network: soc-cloud_cloudnet
+    depends_on: [container_nextcloud_app]
+  - graph_id: container_nextcloud_redis
+    host: vps14
+    kind: container
+    application: db_redis
+    network: soc-cloud_cloudnet
+    depends_on: [svc_docker]
+    volumes: [nextcloud_redis_data]
+  - graph_id: container_forgejo
+    host: vps14
+    kind: container
+    application: app_forgejo
+    network: soc-forgejo_forgejonet
+    ports: [127.0.0.1:3001:3000/tcp]
+    depends_on: [db_postgresql, id_ldap]
+    volumes: [forgejo_data, forgejo_repositories]
+  - graph_id: container_stirling
+    host: vps14
+    kind: container
+    application: app_stirling
+    network: soc-stirling_default
+    ports: [127.0.0.1:8084:8080/tcp]
+    volumes: [stirling_data]
+  - graph_id: app_pterodactyl
+    host: vps14
+    kind: application
+    name: Pterodactyl Panel
+    dns_name: panel.lab.test
+    depends_on: [db_mariadb, svc_pteroq, svc_wings]
+    secret_refs: [pterodactyl_app_key, pterodactyl_database_password]
+  - graph_id: svc_wings
+    host: vps14
+    kind: system
+    name: Wings
+    unit: wings
+    ports: [127.0.0.1:8080/tcp, 2022/tcp]
+    depends_on: [app_pterodactyl]
+    secret_refs: [wings_token]
+  - graph_id: svc_pteroq
+    host: vps14
+    kind: system
+    name: pteroq
+    unit: pteroq
+    depends_on: [db_mariadb, app_pterodactyl]
+  - graph_id: app_portal
+    host: vps14
+    kind: system
+    name: azienda-portal
+    unit: azienda-portal
+    listen: [127.0.0.1:5000]
+    depends_on: [id_ldap, db_postgresql]
+    database: azienda_lab
+    secret_refs: [portal_ldap_password, portal_application_secret]
+  - graph_id: app_scribble
+    host: vps14
+    kind: application
+    name: Scribble
+    ports: [10.10.10.14:8081/tcp, 10.10.10.14:8081/udp, 10.10.10.14:8082/tcp, 10.10.10.14:8082/udp]
+    persistent: true
+    secret_refs: [scribble_application_secret]
+  - graph_id: mon_manager
+    host: vps14
+    kind: monitoring_server
+    name: Wazuh Manager
+    ports: [1514/tcp, 1515/tcp, 55000/tcp]
+    depends_on: [mon_indexer]
+    persistent: true
+    secret_refs: [wazuh_admin_password, wazuh_certificates]
+  - graph_id: mon_indexer
+    host: vps14
+    kind: monitoring_server
+    name: Wazuh Indexer
+    persistent: true
+    secret_refs: [wazuh_indexer_credentials, wazuh_certificates]
+  - graph_id: mon_dashboard
+    host: vps14
+    kind: monitoring_server
+    name: Wazuh Dashboard
+    listen: [127.0.0.1:8443]
+    depends_on: [mon_manager, mon_indexer]
+    secret_refs: [wazuh_dashboard_credentials, wazuh_certificates]
+  - graph_id: mon_agent_vps12
+    host: vps12
+    kind: monitoring_agent
+    name: Wazuh Agent
+    connects_to: mon_manager
+    depends_on: [svc_wireguard_hub, mon_manager]
+  - graph_id: mon_agent_dc02
+    host: vps13
+    kind: monitoring_agent
+    name: Wazuh Agent
+    connects_to: mon_manager
+    depends_on: [svc_wireguard_hub, mon_manager]
+
+configuration_refs:
+  - graph_id: cfg_lab_certificates
+    source: graph/powerseven.graph.json
+    state: declared_configuration_node
+certificates:
+  - graph_id: cert_soc_lab_ca
+    name: SOC Lab Training CA
+    scope: lab.test TLS services
+    private_key_ref: REQUIRED_SECRET
+    state: observed_issuer; certificate inventory and expiry unverified

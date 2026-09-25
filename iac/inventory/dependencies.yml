@@ -1,0 +1,92 @@
+schema_version: 1
+source_graph: ../../graph/powerseven.graph.json
+provisioning_order:
+  - order: 1
+    phase: local_network
+    provides: [vmware_local_network]
+    requires: []
+  - order: 2
+    phase: vps13_os
+    provides: [host_vps13]
+    requires: [vmware_local_network]
+  - order: 3
+    phase: ad_dns
+    provides: [id_ad_ds, id_dns_dc02, id_kerberos, id_ldap, id_ldaps, id_global_catalog]
+    requires: [host_vps13]
+  - order: 4
+    phase: vps14_os
+    provides: [host_vps14]
+    requires: [vmware_local_network, id_dns_dc02]
+  - order: 5
+    phase: vps14_wireguard
+    provides: [svc_wireguard_hub, net_wireguard]
+    requires: [host_vps14]
+  - order: 6
+    phase: vps14_base_services
+    provides: [svc_docker, db_postgresql, db_mariadb, db_redis, svc_nginx]
+    requires: [svc_wireguard_hub, id_dns_dc02]
+  - order: 7
+    phase: databases_and_persistent_storage
+    provides: [datastore_postgresql, datastore_mariadb, datastore_docker_volumes]
+    requires: [db_postgresql, db_mariadb, db_redis]
+  - order: 8
+    phase: applications
+    provides: [applications, app_nextcloud, app_forgejo, app_stirling, app_adguard, app_pterodactyl, app_portal, app_scribble, svc_wings, svc_pteroq]
+    requires: [svc_docker, db_postgresql, db_mariadb, db_redis, id_ldap, svc_nginx]
+  - order: 9
+    phase: certificates_and_proxy
+    provides: [cert_soc_lab_ca, svc_nginx]
+    requires: [id_dns_dc02, applications]
+  - order: 10
+    phase: wazuh
+    provides: [mon_manager, mon_indexer, mon_dashboard]
+    requires: [host_vps14, svc_wireguard_hub, datastore_wazuh]
+  - order: 11
+    phase: vps12_os
+    provides: [host_vps12]
+    requires: [vmware_local_network]
+  - order: 12
+    phase: vps12_wireguard_and_domain_join
+    provides: [svc_wireguard_vps12, svc_sssd, domain_membership_vps12]
+    requires: [host_vps12, svc_wireguard_hub, id_ad_ds, id_dns_dc02, id_kerberos, id_ldap]
+  - order: 13
+    phase: xrdp_and_agents
+    provides: [svc_xrdp, svc_xfce, mon_agent_vps12, mon_agent_dc02]
+    requires: [svc_sssd, mon_manager]
+  - order: 14
+    phase: end_to_end_validation
+    provides: [rebuild_acceptance_report]
+    requires: [net_wireguard, id_dns_dc02, svc_nginx, applications, mon_manager, svc_xrdp]
+
+relations:
+  - source: host_vps12
+    relation: AUTHENTICATES_AGAINST
+    target: id_ad_ds
+  - source: host_vps12
+    relation: RESOLVES_THROUGH
+    target: id_dns_dc02
+  - source: id_dns_dc02
+    relation: FORWARDS_TO
+    target: app_adguard
+  - source: svc_nginx
+    relation: PROXIES_TO
+    target: app_nextcloud
+  - source: app_nextcloud
+    relation: STORES_DATA_IN
+    target: db_postgresql
+  - source: app_pterodactyl
+    relation: STORES_DATA_IN
+    target: db_mariadb
+  - source: mon_agent_vps12
+    relation: CONNECTS_TO
+    target: mon_manager
+  - source: mon_agent_dc02
+    relation: CONNECTS_TO
+    target: mon_manager
+  - source: vps12_domain_join
+    relation: PROVISIONED_AFTER
+    target: id_ad_ds
+
+secret_policy:
+  forbidden_values: [password, token, private_key, secret, api_key]
+  allowed_values: [REQUIRED_SECRET, REQUIRED_DISCOVERY, logical_secret_reference]
