@@ -1,1 +1,20 @@
-{"schema_version":1,"diagram_type":"dataflow","meta":{"title":"PowerSeven — flussi applicativi principali","quality_profile":"showcase","viewBox":[1068,560]},"stages":[{"label":"Accesso"},{"label":"Proxy"},{"label":"Applicazioni"},{"label":"Dati"},{"label":"Operazioni"}],"nodes":[{"id":"user","type":"external","label":"Utente VPN","sublabel":"browser / client","stage":0,"row":1},{"id":"nginx","type":"frontend","label":"Nginx","sublabel":"TLS e routing","stage":1,"row":1},{"id":"apps","type":"backend","label":"Web app","sublabel":"Cloud, Git, PDF, portal","stage":2,"row":1},{"id":"dns","type":"security","label":"AdGuard DNS","sublabel":"53 TCP/UDP","stage":2,"row":2},{"id":"pg","type":"database","label":"PostgreSQL","sublabel":"azienda_lab, forgejo, nextcloud","stage":3,"row":1,"width":170},{"id":"maria","type":"database","label":"MariaDB","sublabel":"panel","stage":3,"row":2},{"id":"wazuh","type":"security","label":"Wazuh","sublabel":"eventi agenti","stage":4,"row":1}],"flows":[{"from":"user","to":"nginx","label":"HTTPS","classification":"accesso applicativo","variant":"security"},{"from":"nginx","to":"apps","label":"reverse proxy","classification":"routing locale","variant":"emphasis"},{"from":"apps","to":"pg","label":"SQL","classification":"dati applicativi","variant":"emphasis","labelAt":[623,314]}],"cards":[{"dot":"emerald","title":"Stato verificato","items":["Nginx e backend locali rispondono", "PostgreSQL e MariaDB sono attivi", "Wazuh riceve gli agenti delle altre VM"]}]}
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {"title":"PowerSeven — percorso web applicativo","quality_profile":"showcase","viewBox":[900,500]},
+  "stages":[{"label":"Accesso"},{"label":"Proxy"},{"label":"Applicazioni"},{"label":"Dati"}],
+  "nodes":[
+    {"id":"user","type":"external","label":"Utente VPN","sublabel":"browser autorizzato","stage":0,"row":1},
+    {"id":"nginx","type":"frontend","label":"Nginx","sublabel":"TLS e reverse proxy","stage":1,"row":1},
+    {"id":"apps","type":"backend","label":"Web app","sublabel":"Cloud · Git · PDF · portale","stage":2,"row":1},
+    {"id":"pg","type":"database","label":"PostgreSQL","sublabel":"dati applicativi","stage":3,"row":1}
+  ],
+  "flows":[
+    {"from":"user","to":"nginx","label":"HTTPS","classification":"accesso applicativo","variant":"security"},
+    {"from":"nginx","to":"apps","label":"backend locale / container","classification":"routing locale","variant":"emphasis","labelAt":[423,314]},
+    {"from":"apps","to":"pg","label":"SQL","classification":"dati applicativi","variant":"emphasis"}
+  ],
+  "cards":[
+    {"dot":"emerald","title":"Ambito","items":["Questo drill-down mostra solo il percorso HTTPS principale", "DNS, Pterodactyl/MariaDB e Wazuh sono nella mappa end-to-end"]}
+  ]
+}
