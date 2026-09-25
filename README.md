@@ -152,7 +152,7 @@ PowerSeven/
     ├── vps14-services.*
     ├── remote-access-sequence.*
     ├── dns-active-directory.*
-    └── application-flows.*
+    └── application-flows.* 
 ```
 
 ## Sicurezza
