@@ -1,4 +1,4 @@
-# PowerSeven
+# PowerSeven 
 
 Documentazione dell'infrastruttura SOC/Lab rilevata il 25 settembre 2026 con ispezione read-only delle tre VM connesse via WireGuard. È una guida operativa e di orientamento: separa i fatti osservati dalle configurazioni applicative non verificate.
 
