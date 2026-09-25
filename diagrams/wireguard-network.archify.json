@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PowerSeven — rete WireGuard definitiva",
+    "quality_profile": "showcase",
+    "viewBox": [1120, 560]
+  },
+  "components": [
+    {"id":"clients","type":"external","label":"Client VPN","sublabel":"10.10.10.101–107","pos":[40,250],"size":[180,62]},
+    {"id":"hub","type":"security","label":"VPS14 · wg-final","sublabel":"10.10.10.14 · UDP 51820","pos":[380,250],"size":[200,62]},
+    {"id":"desktop","type":"frontend","label":"VPS12 · wg-final","sublabel":"10.10.10.12/32","pos":[780,120],"size":[190,62]},
+    {"id":"dc","type":"security","label":"VPS13 · Lab-Final","sublabel":"10.10.10.13/32","pos":[780,370],"size":[190,62]}
+  ],
+  "boundaries": [
+    {"kind":"region","label":"Unico overlay WireGuard · 10.10.10.0/24","wraps":["hub","desktop","dc"],"pad":30}
+  ],
+  "connections": [
+    {"from":"clients","to":"hub","label":"tunnel cifrato","variant":"security","labelAt":[300,340]},
+    {"from":"hub","to":"desktop","label":"peer /32","variant":"security","labelAt":[680,180]},
+    {"from":"hub","to":"dc","label":"peer /32","variant":"security","labelAt":[680,410]}
+  ],
+  "cards": [
+    {"dot":"violet","title":"Assegnazioni client","items":["101 giorgio · 102 peppe · 103 marco · 104 monia","105 rocca · 106 chiara · 107 simone"]},
+    {"dot":"emerald","title":"Stato definitivo","items":["Solo UDP 51820 è pubblicato per WireGuard","Nessun overlay temporaneo è operativo"]}
+  ]
+}

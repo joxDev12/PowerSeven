@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "PowerSeven — architettura operativa",
+    "quality_profile": "showcase",
+    "viewBox": [1280, 720]
+  },
+  "components": [
+    {"id":"clients","type":"external","label":"Client amministrativi","sublabel":"10.10.10.101–107","pos":[40,320],"size":[150,64]},
+    {"id":"wg","type":"security","label":"WireGuard HUB","sublabel":"soc-server · UDP 51820","pos":[250,320],"size":[160,64]},
+    {"id":"server","type":"cloud","label":"VPS14 · soc-server","sublabel":"Ubuntu 24.04 · 10.10.10.14","pos":[470,320],"size":[180,64]},
+    {"id":"proxy","type":"frontend","label":"Nginx","sublabel":"HTTP/S reverse proxy","pos":[710,130],"size":[145,62]},
+    {"id":"apps","type":"backend","label":"Servizi applicativi","sublabel":"Cloud, Forgejo, PDF, AdGuard, Pterodactyl","pos":[950,130],"size":[230,62]},
+    {"id":"data","type":"database","label":"Dati locali","sublabel":"PostgreSQL 18 · MariaDB · Redis","pos":[950,300],"size":[230,62]},
+    {"id":"wazuh","type":"security","label":"Wazuh","sublabel":"Manager, indexer, dashboard","pos":[710,500],"size":[180,62]},
+    {"id":"desktop","type":"frontend","label":"VPS12 · soc-desktop","sublabel":"Ubuntu, XRDP · 10.10.10.12","pos":[300,560],"size":[190,64]},
+    {"id":"dc","type":"security","label":"VPS13 · DC02","sublabel":"AD DS, DNS, Kerberos · 10.10.10.13","pos":[930,560],"size":[210,64]}
+  ],
+  "boundaries": [
+    {"kind":"region","label":"VPN WireGuard definitiva · 10.10.10.0/24","wraps":["wg","server","proxy","apps","data","wazuh","desktop","dc"],"pad":30}
+  ],
+  "connections": [
+    {"from":"clients","to":"wg","label":"tunnel cifrato","variant":"security","labelAt":[220,400]},
+    {"from":"wg","to":"server","label":"routing VPN","variant":"security","labelAt":[440,415]},
+    {"from":"server","to":"proxy","label":"HTTP/S","labelAt":[660,235]},
+    {"from":"proxy","to":"apps","label":"reverse proxy","labelAt":[900,235]},
+    {"from":"apps","to":"data","label":"SQL / cache","labelAt":[1065,275]},
+    {"from":"server","to":"wazuh","label":"telemetria","labelAt":[650,490]},
+    {"from":"desktop","to":"dc","label":"DNS / Kerberos","variant":"security","labelAt":[710,645]}
+  ],
+  "cards": [
+    {"dot":"cyan","title":"Accesso","items":["Client VPN verso VPS14", "RDP a VPS12 e DC02, SSH sulle tre VM"]},
+    {"dot":"emerald","title":"Piattaforma","items":["Nginx pubblica i servizi locali", "Docker affianca servizi systemd"]},
+    {"dot":"violet","title":"Identità e monitoraggio","items":["LAB.TEST su DC02", "Wazuh centrale su VPS14"]}
+  ]
+}
