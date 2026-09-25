@@ -2,7 +2,7 @@
 
 Documentazione dell'infrastruttura SOC/Lab rilevata il 25 settembre 2026 con ispezione read-only delle tre VM connesse via WireGuard. È una guida operativa e di orientamento: separa i fatti osservati dalle configurazioni applicative non verificate.
 
-| VM | VPN | Ruolo verificato |
+| VM | VPN | Ruolo verificato | 
 |---|---|---|
 | `soc-desktop` | `10.10.10.12` | Ubuntu Desktop, XRDP, membro `lab.test`, Wazuh agent |
 | `DC02` | `10.10.10.13` | Windows Server 2022 DC unico, AD DS, DNS, KDC, OpenSSH, Wazuh |
