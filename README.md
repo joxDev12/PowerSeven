@@ -2,14 +2,16 @@
 
 ## Partecipanti
 
-| Nome e cognome |
-|---|
-| Rocca Romaniello |
-| Monia Montagna |
-| Chiara Scaccia |
-| Giuseppe Lucio Luca |
-| Gianmarco Marseglia |
-| Giorgio Gambelli |
+| Nome e cognome | Ruolo |
+|---|---|
+| Rocca Romaniello | Sistemista / Programmatore |
+| Monia Montagna | Sistemista / Programmatore |
+| Chiara Scaccia | Sistemista / Programmatore |
+| Giuseppe Lucio Luca | Sistemista / Programmatore |
+| Gianmarco Marseglia | Sistemista / Programmatore |
+| Giorgio Gambelli | Sistemista / Programmatore |
+| Anna Gloria Buchynska | Sistemista / Programmatore |
+| **Simone Iengo** | **Tutor di progetto** |
 
 PowerSeven è un laboratorio SOC distribuito su tre VM Azure collegate tramite una rete privata WireGuard. L'ambiente integra accesso remoto centralizzato, Active Directory, DNS, monitoraggio Wazuh, reverse proxy, servizi web, database e una piattaforma Pterodactyl.
 
