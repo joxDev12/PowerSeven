@@ -1,5 +1,14 @@
-schema_version: 1
+schema_version: 2
 source_graph: ../../graph/powerseven.graph.json
+scope:
+  source_current: azure_reference
+  target_local: vmware_rebuild
+bootstrap:
+  temporary_resolver: 192.168.214.2
+  dc02_forwarder_initial: 192.168.214.2
+  adguard_address: 192.168.214.14
+  dc02_forwarder_final: 192.168.214.14
+  switch_condition: app_adguard_health_check_passed
 zones:
   - name: lab.test
     kind: active_directory_integrated
@@ -39,27 +48,34 @@ zones:
         type: A
         address: 10.10.10.14
     state: observed
-    migration: export_records_then_recreate_after_ad
+    target_state: create_fresh_zone
   - name: _msdcs.lab.test
     kind: active_directory_integrated
     authoritative_service: id_dns_dc02
     state: observed
-    migration: recreate_from_new_domain_controller_or_restore_authoritative_state
+    target_state: create_fresh_ad_integrated_zone
   - name: reverse-local
     kind: reverse_dns
     authoritative_service: id_dns_dc02
     state: observed
-    migration: inventory_reverse_records_before_rebuild
+    target_state: create_only_records_needed_by_new_lab
 resolver_chain:
   - client: vps12
-    resolver: 10.10.10.13
+    resolver_initial: 192.168.214.2
+    resolver_final: 192.168.214.13
     purpose: domain_and_internal_dns
   - client: vps13
-    resolver: 127.0.0.1
-    forwarder: 10.10.10.14
+    resolver_initial: 192.168.214.2
+    resolver_final: 127.0.0.1
+    forwarder_initial: 192.168.214.2
+    forwarder_final: 192.168.214.14
   - client: id_dns_dc02
-    forwarder: app_adguard
-    address: 10.10.10.14
+    forwarder_initial: 192.168.214.2
+    forwarder_final: 192.168.214.14
+    state: target_bootstrap_then_final
+  - client: vps14
+    resolver_initial: 192.168.214.2
+    resolver_final: 192.168.214.13
   - client: app_adguard
     upstream: internet
-    state: upstreams_unverified
+    state: new_lab_upstreams_to_be_declared

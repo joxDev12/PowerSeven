@@ -36,9 +36,17 @@ Per compatibilita con il validatore Graphify, gli archi owner-declared usano
 `confidence: INFERRED` e `assertion_status: DECLARED`; il significato dichiarato
 resta esplicito senza usare un valore non ammesso dal validatore.
 
-La discovery ha evidenziato una collisione osservata sull'indirizzo Azure
-VNet `172.16.0.4` per piu host. Il grafo la conserva come anomalia da
-riconciliare, senza inventare indirizzi sostitutivi.
+Azure aveva tre VNet regionali isolate, senza peering. Ogni VNet usava
+legittimamente `172.16.0.0/16`, subnet `172.16.0.0/24` e private IP
+`172.16.0.4`; la ripetizione non era una collisione. Il target locale usa una
+sola rete VMware NAT comune, `net_local_vmware_underlay`, separata dall'overlay
+WireGuard `10.10.10.0/24`.
+
+Il grafo distingue `source_current: azure` da `target_local: vmware`. Azure
+resta riferimento storico; nessun nodo target locale dipende da una VNet Azure.
+
+`PERSISTENT_DATA` rappresenta stato precedente escluso dal rebuild corrente.
+`DATASTORE` rappresenta datastore nuovi e vuoti, ricreabili dal modello.
 
 ## Aggiornamento
 

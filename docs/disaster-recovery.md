@@ -1,5 +1,9 @@
 # Disaster recovery
 
+> Scope note: backup, restore e migrazione dati sono fuori scope del rebuild
+> locale corrente. Questo documento conserva solo inventory storico utile a una
+> futura fase separata.
+
 Backup, retention, repository, RPO, RTO e un test di ripristino non sono verificati: non assumere che esistano. Le chiavi WireGuard, certificati, password, dump e file `.env` devono restare in un deposito sicuro fuori dal repository.
 
 | Asset | Dato da proteggere | Dipendenza / failure mode | Verifica read-only da pianificare |

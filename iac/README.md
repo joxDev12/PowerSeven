@@ -5,6 +5,10 @@ contiene segreti. La fonte primaria è [`../graph/powerseven.graph.json`](../gra
 i file YAML sono la proiezione operativa usabile in futuro da renderer VMware,
 Ansible, PowerShell e test di accettazione.
 
+Il catalogo separa `source_current: azure` da `target_local: vmware`. Nessun
+target locale richiede Azure. `iac/inventory/storage.yml` mantiene la distinzione
+tra infrastruttura ricreabile e dati persistenti fuori scope.
+
 ## Toolchain proposta
 
 | Area | Scelta | Motivo |
@@ -32,6 +36,28 @@ workflow fragile. Potrà essere rivalutato se l'host passerà a vSphere/ESXi.
 - `inventory/storage.yml`: dati persistenti, origine, destinazione e migrazione.
 - `inventory/dependencies.yml`: grafo ridotto delle dipendenze e ordine di
   provisioning.
+
+## Struttura target
+
+- `vmware/`: definizioni VMX, rete VMnet, `vmrun`, CPU/RAM/disco/NIC.
+- `linux/`: cloud-init/autoinstall, ruoli Ubuntu, WireGuard, Nginx, DB e host.
+- `windows/`: unattend, PowerShell, AD DS, DNS, gruppi e firewall.
+- `ansible/`: ruoli/playbook idempotenti che compongono Linux e Windows.
+- `docker/`: Compose, reti, container, config e volumi vuoti.
+- `validation/`: check schema, grafo, DNS, rete, servizi e acceptance tests.
+
+Separazione obbligatoria:
+
+```text
+VM CREATION             vmware/
+OS BOOTSTRAP            linux/ windows/
+CONFIGURATION           ansible/
+APPLICATION DEPLOYMENT  docker/ + ansible/
+VALIDATION              validation/
+```
+
+Queste cartelle contengono ora solo contratti e README. Playbook, VMX e script
+arrivano in una fase successiva, dopo approvazione dell'architettura.
 
 ## Regole
 

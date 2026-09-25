@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/wireguard-network.html",
+    "path": "diagrams/wireguard-network.html",
     "sha256": "ba47c8824ab173e1b2e199f5929d5e41367127a4be59da64a1fee7bc8eddc97c",
     "bytes": 800036
   },

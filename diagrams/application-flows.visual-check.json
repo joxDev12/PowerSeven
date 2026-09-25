@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/application-flows.html",
+    "path": "diagrams/application-flows.html",
     "sha256": "dde17854bc3b7397162be2aea37f4ba07e624636e7554f8c8d3254964bc4ffe7",
     "bytes": 799816
   },

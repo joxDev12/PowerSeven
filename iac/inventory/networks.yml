@@ -1,48 +1,104 @@
-schema_version: 1
+schema_version: 2
 source_graph: ../../graph/powerseven.graph.json
-networks:
-  internet:
-    graph_id: net_internet
-    kind: external
-    cidr: null
-    azure_dependency: public-uplink-only
-    local_equivalent: host-lan-or-nat
-  azure_vnet:
-    graph_id: net_azure_vnet
-    kind: cloud-underlay
-    cidr: 172.16.0.0/24
-    state: current_azure_reference
-    local_equivalent: vmware-host-only-or-custom-vmnet
-  wireguard:
+scope:
+  current_azure: reference_only
+  target_local: provisioning_target
+
+current_azure:
+  networks:
+    - graph_id: net_azure_austriaeast
+      name: vnet-austriaeast-1
+      region: Austria East
+      address_space: 172.16.0.0/16
+      subnet: 172.16.0.0/24
+      private_ip_observed: 172.16.0.4
+      host: vps12
+      peering: false
+    - graph_id: net_azure_belgiumcentral
+      name: vnet-belgiumcentral-2
+      region: Belgium Central
+      address_space: 172.16.0.0/16
+      subnet: 172.16.0.0/24
+      private_ip_observed: 172.16.0.4
+      host: vps13
+      peering: false
+    - graph_id: net_azure_denmarkeast
+      name: vnet-denmarkeast-1
+      region: Denmark East
+      address_space: 172.16.0.0/16
+      subnet: 172.16.0.0/24
+      private_ip_observed: 172.16.0.4
+      host: vps14
+      peering: false
+  interpretation: three isolated VNets; repeated private IP is not a collision
+  target_dependency: none
+
+target_local:
+  underlay:
+    graph_id: net_local_vmware_underlay
+    name: VMware VMnet8 NAT
+    kind: vmware_nat
+    cidr: 192.168.214.0/24
+    host_ip: 192.168.214.1
+    gateway: 192.168.214.2
+    dhcp_range_observed: 192.168.214.128-192.168.214.254
+    address_mode: static_in_reserved_low_range
+    vm_addresses:
+      vps12: 192.168.214.12
+      vps13: 192.168.214.13
+      vps14: 192.168.214.14
+    internet: NAT
+    source: local_discovery_2026-09-25
+    state: proposed; not configured by this task
+  overlay:
     graph_id: net_wireguard
-    kind: encrypted-overlay
+    kind: encrypted_overlay
     cidr: 10.10.10.0/24
     hub: vps14
-    peers:
-      - 10.10.10.12/32
-      - 10.10.10.13/32
-      - 10.10.10.101/32
-      - 10.10.10.102/32
-      - 10.10.10.103/32
-      - 10.10.10.104/32
-      - 10.10.10.105/32
-      - 10.10.10.106/32
-      - 10.10.10.107/32
-    endpoint_port: 51820/udp
-    local_equivalent: vmware-host-only-plus-wireguard
-  docker:
-    graph_id: net_docker_default
-    kind: container-bridge-networks
-    state: observed_on_vps14
-    networks:
-      - name: pterodactyl_nw
-        cidr: 172.18.0.0/16
-      - name: soc-stirling_default
-        cidr: 172.19.0.0/16
-      - name: soc-adguard_default
-        cidr: 172.20.0.0/16
-      - name: soc-cloud_cloudnet
-        cidr: 172.31.90.0/24
-      - name: soc-forgejo_forgejonet
-        cidr: 172.31.91.0/24
-    local_equivalent: docker-compose-network-definitions
+    addresses:
+      vps12: 10.10.10.12/32
+      vps13: 10.10.10.13/32
+      vps14: 10.10.10.14/24
+      giorgio: 10.10.10.101/32
+      peppe: 10.10.10.102/32
+      marco: 10.10.10.103/32
+      monia: 10.10.10.104/32
+      rocca: 10.10.10.105/32
+      chiara: 10.10.10.106/32
+      simone: 10.10.10.107/32
+    endpoint: udp/51820
+    state: target_design; not configured by this task
+  external_access:
+    required: true
+    options:
+      - id: vmware_nat_forward
+        source: host_or_upstream_udp_51820
+        destination: 192.168.214.14:51820
+        state: design_only
+      - id: opnsense_forward
+        source: upstream_udp_51820
+        destination: 192.168.214.14:51820
+        state: design_only
+    current_conflict: REQUIRED_LOCAL_DISCOVERY; choose one UDP 51820 owner before implementation
+  collision_scan:
+    required_checks:
+      - local_lan
+      - existing_vmware_networks
+      - existing_host_wireguard
+      - local_container_bridges
+    azure_172_16_0_0_16: cloud reference only; not used by local underlay
+
+container_networks:
+  graph_id: net_docker_default
+  state: recreate_as_part_of_service_deployment
+  networks:
+    - name: pterodactyl_nw
+      cidr: 172.18.0.0/16
+    - name: soc-stirling_default
+      cidr: 172.19.0.0/16
+    - name: soc-adguard_default
+      cidr: 172.20.0.0/16
+    - name: soc-cloud_cloudnet
+      cidr: 172.31.90.0/24
+    - name: soc-forgejo_forgejonet
+      cidr: 172.31.91.0/24

@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/vps14-services.html",
+    "path": "diagrams/vps14-services.html",
     "sha256": "c08f33d71b33ad018e194a267956d5ee3a6c21d5ad1edb70e21f9512cdac2512",
     "bytes": 804788
   },

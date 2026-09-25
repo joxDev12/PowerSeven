@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/remote-access-sequence.html",
+    "path": "diagrams/remote-access-sequence.html",
     "sha256": "5588de9ac9a849e6ec49ddac009d501cf2bb643a4390dd9d59159173820674ce",
     "bytes": 802321
   },

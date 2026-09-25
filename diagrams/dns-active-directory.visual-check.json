@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/dns-active-directory.html",
+    "path": "diagrams/dns-active-directory.html",
     "sha256": "b240d17bddab80a7b306276a1282bffbe99fe4e6f7befdc16e86e0aaff761d58",
     "bytes": 803344
   },

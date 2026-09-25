@@ -1,92 +1,129 @@
-schema_version: 1
+schema_version: 2
 source_graph: ../../graph/powerseven.graph.json
-provisioning_order:
-  - order: 1
-    phase: local_network
-    provides: [vmware_local_network]
-    requires: []
-  - order: 2
-    phase: vps13_os
-    provides: [host_vps13]
-    requires: [vmware_local_network]
-  - order: 3
-    phase: ad_dns
-    provides: [id_ad_ds, id_dns_dc02, id_kerberos, id_ldap, id_ldaps, id_global_catalog]
-    requires: [host_vps13]
-  - order: 4
-    phase: vps14_os
-    provides: [host_vps14]
-    requires: [vmware_local_network, id_dns_dc02]
-  - order: 5
-    phase: vps14_wireguard
-    provides: [svc_wireguard_hub, net_wireguard]
-    requires: [host_vps14]
-  - order: 6
-    phase: vps14_base_services
-    provides: [svc_docker, db_postgresql, db_mariadb, db_redis, svc_nginx]
-    requires: [svc_wireguard_hub, id_dns_dc02]
-  - order: 7
-    phase: databases_and_persistent_storage
-    provides: [datastore_postgresql, datastore_mariadb, datastore_docker_volumes]
-    requires: [db_postgresql, db_mariadb, db_redis]
-  - order: 8
-    phase: applications
-    provides: [applications, app_nextcloud, app_forgejo, app_stirling, app_adguard, app_pterodactyl, app_portal, app_scribble, svc_wings, svc_pteroq]
-    requires: [svc_docker, db_postgresql, db_mariadb, db_redis, id_ldap, svc_nginx]
-  - order: 9
-    phase: certificates_and_proxy
-    provides: [cert_soc_lab_ca, svc_nginx]
-    requires: [id_dns_dc02, applications]
-  - order: 10
-    phase: wazuh
-    provides: [mon_manager, mon_indexer, mon_dashboard]
-    requires: [host_vps14, svc_wireguard_hub, datastore_wazuh]
-  - order: 11
-    phase: vps12_os
-    provides: [host_vps12]
-    requires: [vmware_local_network]
-  - order: 12
-    phase: vps12_wireguard_and_domain_join
-    provides: [svc_wireguard_vps12, svc_sssd, domain_membership_vps12]
-    requires: [host_vps12, svc_wireguard_hub, id_ad_ds, id_dns_dc02, id_kerberos, id_ldap]
-  - order: 13
-    phase: xrdp_and_agents
-    provides: [svc_xrdp, svc_xfce, mon_agent_vps12, mon_agent_dc02]
-    requires: [svc_sssd, mon_manager]
-  - order: 14
-    phase: end_to_end_validation
-    provides: [rebuild_acceptance_report]
-    requires: [net_wireguard, id_dns_dc02, svc_nginx, applications, mon_manager, svc_xrdp]
+scope:
+  source_current: azure_reference_only
+  target_local: vmware_rebuild
+  persistent_application_data: out_of_scope
 
-relations:
-  - source: host_vps12
-    relation: AUTHENTICATES_AGAINST
-    target: id_ad_ds
-  - source: host_vps12
-    relation: RESOLVES_THROUGH
-    target: id_dns_dc02
-  - source: id_dns_dc02
-    relation: FORWARDS_TO
-    target: app_adguard
-  - source: svc_nginx
-    relation: PROXIES_TO
-    target: app_nextcloud
-  - source: app_nextcloud
-    relation: STORES_DATA_IN
-    target: db_postgresql
-  - source: app_pterodactyl
-    relation: STORES_DATA_IN
-    target: db_mariadb
-  - source: mon_agent_vps12
-    relation: CONNECTS_TO
-    target: mon_manager
-  - source: mon_agent_dc02
-    relation: CONNECTS_TO
-    target: mon_manager
-  - source: vps12_domain_join
-    relation: PROVISIONED_AFTER
-    target: id_ad_ds
+provisioning_order:
+  - order: 0
+    phase: host_vmware_preparation
+    parallel: false
+    provides: [vmware_vmnet8_nat]
+    requires: []
+  - order: 1
+    phase: vm_creation
+    parallel: true
+    provides: [vm_vps12, vm_vps13, vm_vps14]
+    requires: [vmware_vmnet8_nat]
+  - order: 2
+    phase: os_bootstrap
+    parallel: true
+    provides: [os_vps12, os_vps13, os_vps14]
+    requires: [vm_vps12, vm_vps13, vm_vps14]
+    dns: 192.168.214.2
+  - order: 3
+    phase: local_underlay_and_bootstrap_dns
+    parallel: true
+    provides: [underlay_vps12, underlay_vps13, underlay_vps14, bootstrap_dns]
+    requires: [os_vps12, os_vps13, os_vps14]
+  - order: 4
+    phase: dc02_ad_dns_bootstrap
+    parallel: false
+    provides: [id_ad_ds, id_dns_dc02, id_kerberos, id_ldap, id_global_catalog]
+    requires: [underlay_vps13, bootstrap_dns]
+    forwarder: 192.168.214.2
+  - order: 5
+    phase: vps14_base_and_adguard
+    parallel: false
+    provides: [svc_ssh_vps14, svc_docker, app_adguard]
+    requires: [underlay_vps14, bootstrap_dns]
+  - order: 6
+    phase: finalize_dns_forwarding
+    parallel: false
+    provides: [dns_forwarder_final]
+    requires: [id_dns_dc02, app_adguard]
+    action: set_dc02_forwarder_to_192.168.214.14
+  - order: 7
+    phase: wireguard_hub_and_peers
+    parallel: false
+    provides: [svc_wireguard_hub, svc_wireguard_vps12, svc_wireguard_vps13, net_wireguard]
+    requires: [underlay_vps12, underlay_vps13, underlay_vps14]
+  - order: 8
+    phase: certificates_and_empty_databases
+    parallel: true
+    provides: [cert_soc_lab_ca, id_ldaps, db_postgresql, db_mariadb, db_redis]
+    requires: [id_ad_ds, app_adguard, svc_docker]
+    data_policy: create_empty_datastores_only
+  - order: 9
+    phase: application_deployment
+    parallel: true
+    provides: [application_deployment, app_nextcloud, app_forgejo, app_stirling, app_portal, app_scribble, app_pterodactyl]
+    requires: [svc_docker, db_postgresql, db_mariadb, db_redis, id_ldap, cert_soc_lab_ca]
+    data_policy: fresh_install_no_application_data_restore
+  - order: 10
+    phase: pterodactyl_workers
+    parallel: true
+    provides: [svc_wings, svc_pteroq]
+    requires: [app_pterodactyl, db_mariadb]
+    dependency_kind: configuration_then_runtime
+  - order: 11
+    phase: nginx_and_firewall
+    parallel: false
+    provides: [svc_nginx, cfg_windows_firewall]
+    requires: [cert_soc_lab_ca, application_deployment]
+  - order: 12
+    phase: wazuh_fresh_install
+    parallel: false
+    provides: [mon_manager, mon_indexer, mon_dashboard]
+    requires: [svc_docker, svc_wireguard_hub]
+    data_policy: fresh_index_empty_history
+  - order: 13
+    phase: vps12_domain_join_and_desktop
+    parallel: false
+    provides: [svc_wireguard_vps12, svc_sssd, svc_xfce, svc_xrdp]
+    requires: [os_vps12, svc_wireguard_hub, id_ad_ds, id_dns_dc02, id_kerberos, id_ldap]
+  - order: 14
+    phase: monitoring_agents
+    parallel: true
+    provides: [mon_agent_vps12, mon_agent_dc02]
+    requires: [mon_manager, svc_wireguard_vps12, id_ad_ds]
+  - order: 15
+    phase: end_to_end_validation
+    parallel: false
+    provides: [local_acceptance_report]
+    requires: [net_wireguard, id_dns_dc02, svc_nginx, app_nextcloud, app_forgejo, app_pterodactyl, mon_manager, svc_xrdp]
+
+dependency_classes:
+  provisioning:
+    - source: svc_wings
+      relation: PROVISIONED_AFTER
+      target: app_pterodactyl
+    - source: svc_pteroq
+      relation: PROVISIONED_AFTER
+      target: app_pterodactyl
+  configuration:
+    - source: svc_wings
+      relation: REQUIRES
+      target: app_pterodactyl
+    - source: svc_pteroq
+      relation: REQUIRES
+      target: app_pterodactyl
+  runtime:
+    - source: svc_wings
+      relation: CONNECTS_TO
+      target: app_pterodactyl
+    - source: svc_pteroq
+      relation: CONNECTS_TO
+      target: app_pterodactyl
+  dns_bootstrap:
+    - source: id_dns_dc02
+      phase: initial
+      forwarder: 192.168.214.2
+    - source: id_dns_dc02
+      phase: final
+      forwarder: app_adguard
 
 secret_policy:
-  forbidden_values: [password, token, private_key, secret, api_key]
-  allowed_values: [REQUIRED_SECRET, REQUIRED_DISCOVERY, logical_secret_reference]
+  forbidden_values: [password, token, private_key, api_key, certificate_key]
+  allowed_values: [REQUIRED_SECRET, logical_secret_reference]

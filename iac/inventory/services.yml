@@ -1,5 +1,14 @@
-schema_version: 1
+schema_version: 2
 source_graph: ../../graph/powerseven.graph.json
+scope:
+  source_current: azure_observation
+  target_local: vmware_rebuild
+dns_bootstrap:
+  initial_resolver: 192.168.214.2
+  final_resolver: 192.168.214.13
+  dc02_forwarder_initial: 192.168.214.2
+  dc02_forwarder_final: 192.168.214.14
+  switch_after: app_adguard
 services:
   - graph_id: svc_wireguard_vps12
     host: vps12
@@ -21,7 +30,8 @@ services:
     host: vps14
     kind: system
     name: WireGuard HUB
-    unit: wireguard@wg-final
+    unit: wg-quick@wg-final
+    unit_state: planned_candidate; verify during implementation
     ports: [51820/udp]
     persistent: true
     secret_refs: [wireguard_server_private_key, wireguard_peer_config]
@@ -75,7 +85,9 @@ services:
     name: DNS
     ports: [53/tcp, 53/udp]
     depends_on: [id_ad_ds]
-    forwards_to: [app_adguard]
+    forwards_to_initial: [192.168.214.2]
+    forwards_to_final: [app_adguard]
+    bootstrap_rule: keep_external_forwarder until app_adguard passes DNS health check
     persistent: true
   - graph_id: id_kerberos
     host: vps13
@@ -116,7 +128,8 @@ services:
     kind: application
     name: AdGuard Home
     dns_name: adguard.lab.test
-    depends_on: [id_dns_dc02, svc_docker]
+    depends_on: [svc_docker]
+    dns_role: final_forwarder_for_dc02
     container: container_adguard
   - graph_id: app_nextcloud
     host: vps14
@@ -215,7 +228,8 @@ services:
     kind: application
     name: Pterodactyl Panel
     dns_name: panel.lab.test
-    depends_on: [db_mariadb, svc_pteroq, svc_wings]
+    depends_on: [db_mariadb]
+    configuration_consumers: [svc_pteroq, svc_wings]
     secret_refs: [pterodactyl_app_key, pterodactyl_database_password]
   - graph_id: svc_wings
     host: vps14
@@ -223,14 +237,19 @@ services:
     name: Wings
     unit: wings
     ports: [127.0.0.1:8080/tcp, 2022/tcp]
-    depends_on: [app_pterodactyl]
+    configuration_requires: [app_pterodactyl]
+    runtime_connects_to: [app_pterodactyl]
+    provision_after: [app_pterodactyl]
     secret_refs: [wings_token]
   - graph_id: svc_pteroq
     host: vps14
     kind: system
     name: pteroq
     unit: pteroq
-    depends_on: [db_mariadb, app_pterodactyl]
+    depends_on: [db_mariadb]
+    configuration_requires: [app_pterodactyl]
+    runtime_connects_to: [app_pterodactyl]
+    provision_after: [app_pterodactyl]
   - graph_id: app_portal
     host: vps14
     kind: system

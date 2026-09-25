@@ -1,87 +1,100 @@
-schema_version: 1
+schema_version: 2
 source_graph: ../../graph/powerseven.graph.json
-storage:
-  - graph_id: pd_ad_system_state
-    host: vps13
-    kind: identity_state
-    data: [NTDS, SYSVOL, AD-integrated-DNS]
-    source_paths: REQUIRED_DISCOVERY
-    migration: system_state_backup_or_documented_domain_rebuild
-    persistent: true
-    recreatable: false
-    backup_required: true
-  - graph_id: pd_wireguard_keys
+scope:
+  target: fresh_local_installation
+  backups: out_of_scope
+  application_data_migration: out_of_scope
+  snapshots: out_of_scope
+
+recreatable_infrastructure:
+  - graph_id: cfg_wg
     host: vps14
-    kind: configuration_secret
-    data: [server_private_key, peer_private_keys, peer_public_keys, allowed_ips]
-    source_paths: /etc/wireguard
-    migration: secure_export_then_reissue_if_policy_allows
-    persistent: true
-    recreatable: false
-    backup_required: true
+    kind: service_configuration
+    data: [WireGuard interface, peer definitions, AllowedIPs]
+    target: generate_from_inventory
     secret_refs: [wireguard_server_private_key, wireguard_peer_config]
-  - graph_id: pd_nextcloud
-    host: vps14
-    kind: application_data
-    data: [files, config, PostgreSQL_nextcloud, Redis_state_if_required]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: backup_restore_and_application_consistency_check
     persistent: true
-    recreatable: false
-    backup_required: true
-  - graph_id: pd_forgejo
+    recreatable: true
+  - graph_id: cfg_nginx
     host: vps14
-    kind: application_data
-    data: [git_repositories, attachments, Forgejo_config, PostgreSQL_forgejo]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: repository_export_or_backup_restore_then_integrity_check
+    kind: service_configuration
+    data: [virtual_hosts, upstreams, TLS bindings]
+    target: generate_from_inventory
+    secret_refs: [certificate_private_keys]
     persistent: true
-    recreatable: false
-    backup_required: true
+    recreatable: true
+  - graph_id: cfg_ad_dns
+    host: vps13
+    kind: identity_configuration
+    data: [new_forest, DNS zones, records, forwarder, groups]
+    target: provision_from_declaration
+    secret_refs: [domain_safe_mode_password, domain_admin_password]
+    persistent: true
+    recreatable: true
+  - graph_id: cfg_lab_certificates
+    host: vps14
+    kind: lab_certificate_authority
+    data: [new_lab_CA, server_certificates, LDAPS_certificate]
+    target: generate_for_new_lab
+    secret_refs: [certificate_private_keys]
+    persistent: true
+    recreatable: true
   - graph_id: datastore_postgresql
     host: vps14
-    kind: database_data
+    kind: empty_database
     source: db_postgresql
-    data: [azienda_lab, forgejo, nextcloud, postgres, roles, grants]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: logical_dump_restore_first
+    data: [database schemas, roles, grants]
+    target: create_empty_databases
+    databases: [azienda_lab, forgejo, nextcloud, postgres]
     persistent: true
-    recreatable: false
-    backup_required: true
-    secret_refs: [postgres_admin_password, application_database_passwords]
+    recreatable: true
   - graph_id: datastore_mariadb
     host: vps14
-    kind: database_data
+    kind: empty_database
     source: db_mariadb
-    data: [panel, users, grants]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: logical_dump_restore_first
+    data: [database schema, roles, grants]
+    target: create_empty_database
+    databases: [panel]
     persistent: true
-    recreatable: false
-    backup_required: true
-    secret_refs: [mariadb_admin_password, pterodactyl_database_password]
-  - graph_id: datastore_wazuh
-    host: vps14
-    kind: monitoring_data
-    data: [manager_config, indexer_data, dashboard_config, certificates]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: decide_history_retention_then_restore_or_reindex
-    persistent: true
-    recreatable: false
-    backup_required: true
-    secret_refs: [wazuh_certificates, wazuh_credentials]
+    recreatable: true
   - graph_id: datastore_docker_volumes
     host: vps14
-    kind: container_data
-    data: [adguard, nextcloud, forgejo, stirling, redis]
-    source_paths: REQUIRED_DISCOVERY
-    destination: local_vps14
-    migration: inventory_compose_mounts_then_backup_restore
+    kind: empty_application_volumes
+    data: [fresh AdGuard config, fresh Nextcloud config, fresh Forgejo config, fresh Stirling config]
+    target: create_empty_volumes
     persistent: true
-    recreatable: false
-    backup_required: true
+    recreatable: true
+  - graph_id: datastore_wazuh
+    host: vps14
+    kind: fresh_monitoring_state
+    data: [manager config, indexer config, dashboard config, new indexes]
+    target: initialize_empty_stack
+    persistent: true
+    recreatable: true
+
+persistent_application_data_out_of_scope:
+  - graph_id: pd_ad_system_state
+    host: vps13
+    data: [old NTDS, old SYSVOL, old AD state]
+    action: do_not_restore; create_new_domain
+    status: out_of_scope
+  - graph_id: pd_wireguard_keys
+    host: vps14
+    data: [old server key, old peer keys]
+    action: generate_new_keys
+    status: out_of_scope
+  - graph_id: pd_nextcloud
+    host: vps14
+    data: [old files, old config, old database, old Redis state]
+    action: no_migration; initialize_empty_application
+    status: out_of_scope
+  - graph_id: pd_forgejo
+    host: vps14
+    data: [old repositories, old attachments, old database]
+    action: no_migration; initialize_empty_application
+    status: out_of_scope
+  - graph_id: legacy_wazuh_history
+    host: vps14
+    data: [old indexes, old events, old retention history]
+    action: no_restore; start_empty_indexer
+    status: out_of_scope

@@ -5,12 +5,12 @@
 | Confine | Uso documentato | Cosa non implica |
 |---|---|---|
 | Internet pubblico | il solo ingresso pubblico dichiarato per la VPN è WireGuard VPS14 UDP 51820; Nginx può essere pubblicato secondo NSG/routing | un listener host non prova che sia Internet-esposto |
-| Azure VNet privata | `172.16.0.0/24`, ad esempio `172.16.0.4` sulle VM | una porta sulla VNet è privata finché non esistono public IP/NAT/NSG che ne consentano il transito |
+| Azure VNet private | tre VNet isolate, ciascuna `172.16.0.0/16` con subnet `172.16.0.0/24` e IP `172.16.0.4` | indirizzo ripetuto legittimo: VNet distinte, nessun peering |
 | WireGuard | `10.10.10.0/24`, accesso amministrativo e servizi interni | non è Internet pubblico; richiede peer autorizzato e routing del tunnel |
 | localhost | `127.0.0.0/8`, backend come Nginx→container/processi | non è raggiungibile direttamente dalla rete senza proxy/forwarding locale |
 | Docker | reti bridge dedicate su VPS14 | un container non è automaticamente raggiungibile dalla VNet o da Internet; dipende dai port mapping |
 
-L'Azure NSG filtra il traffico a livello Azure prima che raggiunga l'host; firewall host (Windows Firewall, nftables/UFW/Docker) decide poi sul traffico arrivato. Perciò un binding su Azure VNet o su `10.10.10.14` non è automaticamente pubblico su Internet. Le regole NSG effettive, i public IP/NAT e la loro associazione non sono stati verificati direttamente in questa revisione. Non risultano configurazioni WireGuard temporanee attive; UDP 51820 è la porta VPN operativa dichiarata.
+L'Azure NSG filtra il traffico a livello Azure prima che raggiunga l'host; firewall host (Windows Firewall, nftables/UFW/Docker) decide poi sul traffico arrivato. Perciò un binding su una VNet Azure o su `10.10.10.14` non è automaticamente pubblico su Internet. Le tre VNet erano isolate e senza peering. Le regole NSG effettive, i public IP/NAT e la loro associazione non sono stati verificati direttamente in questa revisione. Non risultano configurazioni WireGuard temporanee attive; UDP 51820 è la porta VPN operativa dichiarata.
 
 ## Controlli osservati e superfici
 

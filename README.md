@@ -140,6 +140,10 @@ Wazuh è centralizzato su VPS14 con Manager, Indexer e Dashboard. VPS12 e DC02 i
 | Knowledge graph | [graph/README.md](graph/README.md) |
 | Modello IaC locale | [iac/README.md](iac/README.md) |
 | Azure exit plan | [docs/azure-exit-plan.md](docs/azure-exit-plan.md) |
+| Architettura locale | [docs/local-architecture.md](docs/local-architecture.md) |
+| Ordine provisioning | [docs/provisioning-order.md](docs/provisioning-order.md) |
+| Guida rebuild locale | [docs/local-rebuild-guide.md](docs/local-rebuild-guide.md) |
+| Test accettazione locale | [docs/local-acceptance-tests.md](docs/local-acceptance-tests.md) |
 
 ## Struttura repository
 
@@ -161,13 +165,23 @@ PowerSeven/
 │   ├── security.md
 │   ├── troubleshooting.md
 │   ├── disaster-recovery.md
-│   └── azure-exit-plan.md
+│   ├── azure-exit-plan.md
+│   ├── local-architecture.md
+│   ├── provisioning-order.md
+│   ├── local-rebuild-guide.md
+│   └── local-acceptance-tests.md
 ├── graph/
 │   ├── README.md
 │   └── powerseven.graph.json
 ├── iac/
 │   ├── README.md
-│   └── inventory/
+│   ├── inventory/
+│   ├── vmware/
+│   ├── linux/
+│   ├── windows/
+│   ├── ansible/
+│   ├── docker/
+│   └── validation/
 └── diagrams/
     ├── powerseven-end-to-end.*
     ├── architecture-overview.*

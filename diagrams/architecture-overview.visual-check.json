@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/architecture-overview.html",
+    "path": "diagrams/architecture-overview.html",
     "sha256": "c428f4a28640d87857df3324830f3f5ea382e4adcd8f0bf39ec9ecaeb54af44e",
     "bytes": 810249
   },

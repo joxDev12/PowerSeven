@@ -8,4 +8,4 @@ Il percorso è [documentato nel diagramma](../diagrams/remote-access-sequence.ht
 | VPS12 | SSH TCP 22 | account e policy non verificati | `ss -tulpn` | servizio/rete non disponibile |
 | DC02 | RDP TCP 3389, OpenSSH TCP 22, WinRM HTTP 5985 | Windows/AD | `Get-NetTCPConnection -State Listen` | servizio o firewall Windows |
 
-Il join VPS12 è `kerberos-member` su `lab.test`; SSSD ammette `SOC-Desktop-Users@lab.test`. Usare gli IP VPN per l'amministrazione ordinaria; `172.16.0.0/24` è Azure VNet privata e non è il percorso operativo documentato. Non inserire credenziali in comandi, file o repository.
+Il join VPS12 è `kerberos-member` su `lab.test`; SSSD ammette `SOC-Desktop-Users@lab.test`. Usare gli IP VPN per l'amministrazione ordinaria; le tre reti Azure `172.16.0.0/24` erano underlay isolate e non il percorso operativo documentato. Non inserire credenziali in comandi, file o repository.

@@ -6,7 +6,7 @@
   "status": "pass",
   "visualReview": "pending",
   "artifact": {
-    "path": "/home/jox/PowerSeven/diagrams/powerseven-end-to-end.html",
+    "path": "diagrams/powerseven-end-to-end.html",
     "sha256": "75a775d6de7088e0a07591fe8e0f85dac56e15e5c590ed18b83c7cc1abfcafba",
     "bytes": 821175
   },
