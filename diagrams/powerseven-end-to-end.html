@@ -5156,19 +5156,25 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Azure VNet privata + WireGuard 10.10.10.0/24" x="212" y="72" width="1176" height="700" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Azure VNet privata · 172.16.0.0/24" x="182" y="56" width="1206" height="716" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="1" data-composition-frame-label="WireGuard overlay · 10.10.10.0/24" x="233" y="75" width="744" height="107" rx="8" class="c-security-group" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="clients" data-edge-to="hub" data-edge-label="WireGuard UDP 51820" data-edge-key="0" data-composition-points="220,131;245,131" d="M 220 131 L 245 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="clients" data-edge-to="hub" data-edge-label="WireGuard UDP 51820 · SSH 22" data-edge-key="0" data-composition-points="220,131;245,131" d="M 220 131 L 245 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="hub" data-edge-to="desktop" data-edge-label="RDP 3389 / SSH 22" data-edge-key="1" data-composition-points="455,131;480,131" d="M 455 131 L 480 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="desktop" data-edge-to="dc" data-edge-label="DNS · Kerberos · LDAP" data-edge-key="2" data-composition-points="700,131;725,131" d="M 700 131 L 725 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="dc" data-edge-to="adguard" data-edge-label="DNS forwarder" data-edge-key="3" data-composition-points="965,131;990,131" d="M 965 131 L 990 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="adguard" data-edge-to="internet" data-edge-label="DNS upstream" data-edge-key="4" data-composition-points="1180,131;1205,131" d="M 1180 131 L 1205 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="hub" data-edge-to="nginx" data-edge-label="HTTPS via VPN" data-edge-key="5" data-composition-points="350,162;350,350" d="M 350 162 L 350 350" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="nginx" data-edge-to="apps" data-edge-label="backend locali / container" data-edge-key="6" data-composition-points="460,381;690,381" d="M 460 381 L 690 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="apps" data-edge-to="dc" data-edge-label="LDAP: Nextcloud · Forgejo · portale" data-edge-key="7" data-composition-points="845,350;845,162" d="M 845 350 L 845 162" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="apps" data-edge-to="data" data-edge-label="PostgreSQL · Redis" data-edge-key="8" data-composition-points="1000,381;1140,381" d="M 1000 381 L 1140 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="pter" data-edge-to="data" data-edge-label="MariaDB: Pterodactyl" data-edge-key="9" data-composition-points="940,601;1040,601;1040,381;1140,381" d="M 940 601 L 1032 601 Q 1040 601 1040 593 L 1040 389 Q 1040 381 1048 381 L 1140 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="hub" data-edge-to="dc" data-edge-label="RDP 3389 / SSH 22" data-edge-key="2" data-composition-points="350,100;350,60;845,60;845,100" d="M 350 100 L 350 68 Q 350 60 358 60 L 837 60 Q 845 60 845 68 L 845 100" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="desktop" data-edge-to="dc" data-edge-label="DNS · Kerberos · LDAP" data-edge-key="3" data-composition-points="700,131;725,131" d="M 700 131 L 725 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="dc" data-edge-to="adguard" data-edge-label="DNS forwarder" data-edge-key="4" data-composition-points="965,131;990,131" d="M 965 131 L 990 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="adguard" data-edge-to="internet" data-edge-label="DNS upstream" data-edge-key="5" data-composition-points="1180,131;1205,131" d="M 1180 131 L 1205 131" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="hub" data-edge-to="nginx" data-edge-label="HTTPS via VPN" data-edge-key="6" data-composition-points="350,162;350,350" d="M 350 162 L 350 350" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="nginx" data-edge-to="apps" data-edge-label="backend locali / container" data-edge-key="7" data-composition-points="460,381;690,381" d="M 460 381 L 690 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="apps" data-edge-to="dc" data-edge-label="LDAP: Nextcloud · Forgejo · portale" data-edge-key="8" data-composition-points="845,350;845,162" d="M 845 350 L 845 162" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="apps" data-edge-to="data" data-edge-label="PostgreSQL · Redis" data-edge-key="9" data-composition-points="1000,381;1140,381" d="M 1000 381 L 1140 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="pter" data-edge-to="data" data-edge-label="MariaDB: Pterodactyl" data-edge-key="10" data-composition-points="940,601;1040,601;1040,381;1140,381" d="M 940 601 L 1032 601 Q 1040 601 1040 593 L 1040 389 Q 1040 381 1048 381 L 1140 381" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="nginx" data-edge-to="pter" data-edge-label="reverse proxy" data-edge-key="11" data-composition-points="350,412;350,500;650,500;650,601;690,601" d="M 350 412 L 350 492 Q 350 500 358 500 L 642 500 Q 650 500 650 508 L 650 593 Q 650 601 658 601 L 690 601" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="agent12" data-edge-to="wazuh" data-edge-label="1514/TCP" data-edge-key="12" data-composition-points="555,622;555,690" d="M 555 622 L 555 690" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="agentdc" data-edge-to="wazuh" data-edge-label="1514/TCP" data-edge-key="13" data-composition-points="300,622;300,650;400,650;400,721;430,721" d="M 300 622 L 300 642 Q 300 650 308 650 L 392 650 Q 400 650 400 658 L 400 713 Q 400 721 408 721 L 430 721" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-clients" data-node-id="clients" data-node-label="Client WG · 10.10.10.101–107" tabindex="0" role="button" aria-label="Focus Client WG · 10.10.10.101–107, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
@@ -5182,8 +5188,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-node-label="" x="110" y="135" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Client WG · 10.10.10.101–107</text>
         </g>
 
-        <g id="node-hub" data-node-id="hub" data-node-label="VPS14 · WireGuard HUB" tabindex="0" role="button" aria-label="Focus VPS14 · WireGuard HUB, wg-final · UDP 51820, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="wg-final · UDP 51820" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>VPS14 · WireGuard HUB · wg-final · UDP 51820 · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-hub" data-node-id="hub" data-node-label="VPS14 · WireGuard HUB" tabindex="0" role="button" aria-label="Focus VPS14 · WireGuard HUB, wg-final · UDP 51820 · SSH 22, Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="wg-final · UDP 51820 · SSH 22" data-node-context="Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24">
+          <title>VPS14 · WireGuard HUB · wg-final · UDP 51820 · SSH 22 · Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24</title>
           <rect x="245" y="100" width="210" height="62" rx="6" class="c-mask"/>
           <rect x="245" y="100" width="210" height="62" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(251 106) scale(0.6875)">
@@ -5191,11 +5197,11 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="350" y="129" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">VPS14 · WireGuard HUB</text>
-        <text data-detail="context" x="350" y="145" class="t-muted" font-size="9" text-anchor="middle">wg-final · UDP 51820</text>
+        <text data-detail="context" x="350" y="145" class="t-muted" font-size="9" text-anchor="middle">wg-final · UDP 51820 · SSH 22</text>
         </g>
 
-        <g id="node-desktop" data-node-id="desktop" data-node-label="VPS12 · soc-desktop" tabindex="0" role="button" aria-label="Focus VPS12 · soc-desktop, RDP · SSH · Wazuh agent, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="RDP · SSH · Wazuh agent" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>VPS12 · soc-desktop · RDP · SSH · Wazuh agent · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-desktop" data-node-id="desktop" data-node-label="VPS12 · soc-desktop" tabindex="0" role="button" aria-label="Focus VPS12 · soc-desktop, RDP · SSH · Wazuh agent, Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="RDP · SSH · Wazuh agent" data-node-context="Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24">
+          <title>VPS12 · soc-desktop · RDP · SSH · Wazuh agent · Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24</title>
           <rect x="480" y="100" width="220" height="62" rx="6" class="c-mask"/>
           <rect x="480" y="100" width="220" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(486 106) scale(0.6875)">
@@ -5208,8 +5214,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="590" y="145" class="t-muted" font-size="9" text-anchor="middle">RDP · SSH · Wazuh agent</text>
         </g>
 
-        <g id="node-dc" data-node-id="dc" data-node-label="VPS13 · DC02" tabindex="0" role="button" aria-label="Focus VPS13 · DC02, AD DS · DNS · Kerberos · LDAP, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="AD DS · DNS · Kerberos · LDAP" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>VPS13 · DC02 · AD DS · DNS · Kerberos · LDAP · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-dc" data-node-id="dc" data-node-label="VPS13 · DC02" tabindex="0" role="button" aria-label="Focus VPS13 · DC02, AD DS · DNS · Kerberos · LDAP, Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="AD DS · DNS · Kerberos · LDAP" data-node-context="Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24">
+          <title>VPS13 · DC02 · AD DS · DNS · Kerberos · LDAP · Azure VNet privata · 172.16.0.0/24 › WireGuard overlay · 10.10.10.0/24</title>
           <rect x="725" y="100" width="240" height="62" rx="6" class="c-mask"/>
           <rect x="725" y="100" width="240" height="62" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(731 106) scale(0.6875)">
@@ -5220,8 +5226,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="845" y="145" class="t-muted" font-size="9" text-anchor="middle">AD DS · DNS · Kerberos · LDAP</text>
         </g>
 
-        <g id="node-adguard" data-node-id="adguard" data-node-label="AdGuard Home" tabindex="0" role="button" aria-label="Focus AdGuard Home, DNS 53 TCP/UDP, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="DNS 53 TCP/UDP" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>AdGuard Home · DNS 53 TCP/UDP · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-adguard" data-node-id="adguard" data-node-label="AdGuard Home" tabindex="0" role="button" aria-label="Focus AdGuard Home, DNS 53 TCP/UDP, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="DNS 53 TCP/UDP" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>AdGuard Home · DNS 53 TCP/UDP · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="990" y="100" width="190" height="62" rx="6" class="c-mask"/>
           <rect x="990" y="100" width="190" height="62" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(996 106) scale(0.6875)">
@@ -5244,8 +5250,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="1295" y="145" class="t-muted" font-size="9" text-anchor="middle">DNS upstream</text>
         </g>
 
-        <g id="node-nginx" data-node-id="nginx" data-node-label="Nginx" tabindex="0" role="button" aria-label="Focus Nginx, HTTPS 80/443 · reverse proxy, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="HTTPS 80/443 · reverse proxy" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>Nginx · HTTPS 80/443 · reverse proxy · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-nginx" data-node-id="nginx" data-node-label="Nginx" tabindex="0" role="button" aria-label="Focus Nginx, HTTPS 80/443 · reverse proxy, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="HTTPS 80/443 · reverse proxy" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>Nginx · HTTPS 80/443 · reverse proxy · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="240" y="350" width="220" height="62" rx="6" class="c-mask"/>
           <rect x="240" y="350" width="220" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(246 356) scale(0.6875)">
@@ -5258,8 +5264,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="350" y="395" class="t-muted" font-size="9" text-anchor="middle">HTTPS 80/443 · reverse proxy</text>
         </g>
 
-        <g id="node-apps" data-node-id="apps" data-node-label="Applicazioni web" tabindex="0" role="button" aria-label="Focus Applicazioni web, Nextcloud · Forgejo · Stirling · Scribble · portale, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Nextcloud · Forgejo · Stirling · Scribble · portale" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>Applicazioni web · Nextcloud · Forgejo · Stirling · Scribble · portale · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-apps" data-node-id="apps" data-node-label="Applicazioni web" tabindex="0" role="button" aria-label="Focus Applicazioni web, Nextcloud · Forgejo · Stirling · Scribble · portale, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Nextcloud · Forgejo · Stirling · Scribble · portale" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>Applicazioni web · Nextcloud · Forgejo · Stirling · Scribble · portale · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="690" y="350" width="310" height="62" rx="6" class="c-mask"/>
           <rect x="690" y="350" width="310" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(696 356) scale(0.6875)">
@@ -5269,8 +5275,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="845" y="395" class="t-muted" font-size="9" text-anchor="middle">Nextcloud · Forgejo · Stirling · Scribble · portale</text>
         </g>
 
-        <g id="node-data" data-node-id="data" data-node-label="Data services" tabindex="0" role="button" aria-label="Focus Data services, PostgreSQL · MariaDB · Redis, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="database" data-node-sublabel="PostgreSQL · MariaDB · Redis" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>Data services · PostgreSQL · MariaDB · Redis · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-data" data-node-id="data" data-node-label="Data services" tabindex="0" role="button" aria-label="Focus Data services, PostgreSQL · MariaDB · Redis, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="database" data-node-sublabel="PostgreSQL · MariaDB · Redis" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>Data services · PostgreSQL · MariaDB · Redis · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="1140" y="350" width="220" height="62" rx="6" class="c-mask"/>
           <rect x="1140" y="350" width="220" height="62" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(1146 356) scale(0.6875)">
@@ -5281,8 +5287,32 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="1250" y="395" class="t-muted" font-size="9" text-anchor="middle">PostgreSQL · MariaDB · Redis</text>
         </g>
 
-        <g id="node-pter" data-node-id="pter" data-node-label="Pterodactyl / Wings" tabindex="0" role="button" aria-label="Focus Pterodactyl / Wings, Panel · queue worker · SFTP, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Panel · queue worker · SFTP" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>Pterodactyl / Wings · Panel · queue worker · SFTP · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-agentdc" data-node-id="agentdc" data-node-label="DC02 Wazuh Agent" tabindex="0" role="button" aria-label="Focus DC02 Wazuh Agent, VPS13 · 10.10.10.13, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="VPS13 · 10.10.10.13" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>DC02 Wazuh Agent · VPS13 · 10.10.10.13 · Azure VNet privata · 172.16.0.0/24</title>
+          <rect x="210" y="570" width="180" height="52" rx="6" class="c-mask"/>
+          <rect x="210" y="570" width="180" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(216 576) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="300" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">DC02 Wazuh Agent</text>
+        <text data-detail="context" x="300" y="610" class="t-muted" font-size="9" text-anchor="middle">VPS13 · 10.10.10.13</text>
+        </g>
+
+        <g id="node-agent12" data-node-id="agent12" data-node-label="VPS12 Wazuh Agent" tabindex="0" role="button" aria-label="Focus VPS12 Wazuh Agent, soc-desktop · 10.10.10.12, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="soc-desktop · 10.10.10.12" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>VPS12 Wazuh Agent · soc-desktop · 10.10.10.12 · Azure VNet privata · 172.16.0.0/24</title>
+          <rect x="465" y="570" width="180" height="52" rx="6" class="c-mask"/>
+          <rect x="465" y="570" width="180" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(471 576) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="555" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">VPS12 Wazuh Agent</text>
+        <text data-detail="context" x="555" y="610" class="t-muted" font-size="9" text-anchor="middle">soc-desktop · 10.10.10.12</text>
+        </g>
+
+        <g id="node-pter" data-node-id="pter" data-node-label="Pterodactyl / Wings" tabindex="0" role="button" aria-label="Focus Pterodactyl / Wings, Panel · queue worker · SFTP, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Panel · queue worker · SFTP" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>Pterodactyl / Wings · Panel · queue worker · SFTP · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="690" y="570" width="250" height="62" rx="6" class="c-mask"/>
           <rect x="690" y="570" width="250" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(696 576) scale(0.6875)">
@@ -5292,8 +5322,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="815" y="615" class="t-muted" font-size="9" text-anchor="middle">Panel · queue worker · SFTP</text>
         </g>
 
-        <g id="node-wazuh" data-node-id="wazuh" data-node-label="Wazuh Manager" tabindex="0" role="button" aria-label="Focus Wazuh Manager, VPS14 · agenti: VPS12 e DC02, Azure VNet privata + WireGuard 10.10.10.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="VPS14 · agenti: VPS12 e DC02" data-node-context="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <title>Wazuh Manager · VPS14 · agenti: VPS12 e DC02 · Azure VNet privata + WireGuard 10.10.10.0/24</title>
+        <g id="node-wazuh" data-node-id="wazuh" data-node-label="Wazuh Manager" tabindex="0" role="button" aria-label="Focus Wazuh Manager, VPS14 · agenti: VPS12 e DC02, Azure VNet privata · 172.16.0.0/24" aria-pressed="false" data-node-kind="security" data-node-sublabel="VPS14 · agenti: VPS12 e DC02" data-node-context="Azure VNet privata · 172.16.0.0/24">
+          <title>Wazuh Manager · VPS14 · agenti: VPS12 e DC02 · Azure VNet privata · 172.16.0.0/24</title>
           <rect x="430" y="690" width="250" height="62" rx="6" class="c-mask"/>
           <rect x="430" y="690" width="250" height="62" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(436 696) scale(0.6875)">
@@ -5305,51 +5335,72 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="clients" data-edge-to="hub" data-edge-label="WireGuard UDP 51820" data-edge-key="0">
-          <rect x="181.4" y="180" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="232" y="190" class="t-security" font-size="8" text-anchor="middle">WireGuard UDP 51820</text>
+        <g data-detail="context" data-edge-from="clients" data-edge-to="hub" data-edge-label="WireGuard UDP 51820 · SSH 22" data-edge-key="0">
+          <rect x="47.8" y="180" width="144.4" height="14" rx="3" class="c-mask"/>
+          <text x="120" y="190" class="t-security" font-size="8" text-anchor="middle">WireGuard UDP 51820 · SSH 22</text>
         </g>
         <g data-detail="context" data-edge-from="hub" data-edge-to="desktop" data-edge-label="RDP 3389 / SSH 22" data-edge-key="1">
           <rect x="422.2" y="180" width="91.6" height="14" rx="3" class="c-mask"/>
           <text x="468" y="190" class="t-security" font-size="8" text-anchor="middle">RDP 3389 / SSH 22</text>
         </g>
-        <g data-detail="context" data-edge-from="desktop" data-edge-to="dc" data-edge-label="DNS · Kerberos · LDAP" data-edge-key="2">
+        <g data-detail="context" data-edge-from="hub" data-edge-to="dc" data-edge-label="RDP 3389 / SSH 22" data-edge-key="2">
+          <rect x="554.2" y="50" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="600" y="60" class="t-security" font-size="8" text-anchor="middle">RDP 3389 / SSH 22</text>
+        </g>
+        <g data-detail="context" data-edge-from="desktop" data-edge-to="dc" data-edge-label="DNS · Kerberos · LDAP" data-edge-key="3">
           <rect x="657.6" y="180" width="110.8" height="14" rx="3" class="c-mask"/>
           <text x="713" y="190" class="t-security" font-size="8" text-anchor="middle">DNS · Kerberos · LDAP</text>
         </g>
-        <g data-detail="context" data-edge-from="dc" data-edge-to="adguard" data-edge-label="DNS forwarder" data-edge-key="3">
+        <g data-detail="context" data-edge-from="dc" data-edge-to="adguard" data-edge-label="DNS forwarder" data-edge-key="4">
           <rect x="941.8" y="180" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="978" y="190" class="t-security" font-size="8" text-anchor="middle">DNS forwarder</text>
         </g>
-        <g data-detail="context" data-edge-from="adguard" data-edge-to="internet" data-edge-label="DNS upstream" data-edge-key="4">
+        <g data-detail="context" data-edge-from="adguard" data-edge-to="internet" data-edge-label="DNS upstream" data-edge-key="5">
           <rect x="1159.2" y="180" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="1193" y="190" class="t-security" font-size="8" text-anchor="middle">DNS upstream</text>
         </g>
-        <g data-detail="context" data-edge-from="hub" data-edge-to="nginx" data-edge-label="HTTPS via VPN" data-edge-key="5">
+        <g data-detail="context" data-edge-from="hub" data-edge-to="nginx" data-edge-label="HTTPS via VPN" data-edge-key="6">
           <rect x="313.8" y="265" width="72.4" height="14" rx="3" class="c-mask"/>
           <text x="350" y="275" class="t-security" font-size="8" text-anchor="middle">HTTPS via VPN</text>
         </g>
-        <g data-detail="context" data-edge-from="nginx" data-edge-to="apps" data-edge-label="backend locali / container" data-edge-key="6">
-          <rect x="512.6" y="430" width="134.8" height="14" rx="3" class="c-mask"/>
-          <text x="580" y="440" class="t-muted" font-size="8" text-anchor="middle">backend locali / container</text>
+        <g data-detail="context" data-edge-from="nginx" data-edge-to="apps" data-edge-label="backend locali / container" data-edge-key="7">
+          <rect x="582.6" y="430" width="134.8" height="14" rx="3" class="c-mask"/>
+          <text x="650" y="440" class="t-muted" font-size="8" text-anchor="middle">backend locali / container</text>
         </g>
-        <g data-detail="context" data-edge-from="apps" data-edge-to="dc" data-edge-label="LDAP: Nextcloud · Forgejo · portale" data-edge-key="7">
+        <g data-detail="context" data-edge-from="apps" data-edge-to="dc" data-edge-label="LDAP: Nextcloud · Forgejo · portale" data-edge-key="8">
           <rect x="756" y="265" width="178" height="14" rx="3" class="c-mask"/>
           <text x="845" y="275" class="t-security" font-size="8" text-anchor="middle">LDAP: Nextcloud · Forgejo · portale</text>
         </g>
-        <g data-detail="context" data-edge-from="apps" data-edge-to="data" data-edge-label="PostgreSQL · Redis" data-edge-key="8">
+        <g data-detail="context" data-edge-from="apps" data-edge-to="data" data-edge-label="PostgreSQL · Redis" data-edge-key="9">
           <rect x="1031.8" y="310" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="1080" y="320" class="t-muted" font-size="8" text-anchor="middle">PostgreSQL · Redis</text>
         </g>
-        <g data-detail="context" data-edge-from="pter" data-edge-to="data" data-edge-label="MariaDB: Pterodactyl" data-edge-key="9">
+        <g data-detail="context" data-edge-from="pter" data-edge-to="data" data-edge-label="MariaDB: Pterodactyl" data-edge-key="10">
           <rect x="992" y="590" width="106" height="14" rx="3" class="c-mask"/>
           <text x="1045" y="600" class="t-muted" font-size="8" text-anchor="middle">MariaDB: Pterodactyl</text>
         </g>
+        <g data-detail="context" data-edge-from="nginx" data-edge-to="pter" data-edge-label="reverse proxy" data-edge-key="11">
+          <rect x="463.8" y="490" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="500" y="500" class="t-backend" font-size="8" text-anchor="middle">reverse proxy</text>
+        </g>
+        <g data-detail="context" data-edge-from="agent12" data-edge-to="wazuh" data-edge-label="1514/TCP" data-edge-key="12">
+          <rect x="585.8" y="650" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="610" y="660" class="t-messagebus" font-size="8" text-anchor="middle">1514/TCP</text>
+        </g>
+        <g data-detail="context" data-edge-from="agentdc" data-edge-to="wazuh" data-edge-label="1514/TCP" data-edge-key="13">
+          <rect x="305.8" y="640" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="330" y="650" class="t-messagebus" font-size="8" text-anchor="middle">1514/TCP</text>
+        </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Azure VNet privata + WireGuard 10.10.10.0/24">
-          <rect data-graph-role="structural-frame-label-mask" x="216" y="79" width="247.60002639999996" height="17" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="220" y="92.000001" class="t-cloud" font-size="9.000001" font-weight="600">Azure VNet privata + WireGuard 10.10.10.0/24</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Azure VNet privata · 172.16.0.0/24">
+          <rect data-graph-role="structural-frame-label-mask" x="186" y="60" width="193.60002039999998" height="17" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="190" y="73.000001" class="t-cloud" font-size="9.000001" font-weight="600">Azure VNet privata · 172.16.0.0/24</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="security-group" data-composition-frame-label="WireGuard overlay · 10.10.10.0/24">
+          <rect data-graph-role="structural-frame-label-mask" x="237" y="79" width="188.20001979999998" height="17" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="241" y="92.000001" class="t-security" font-size="9.000001" font-weight="600">WireGuard overlay · 10.10.10.0/24</text>
         </g>
 
         <!-- Legend -->

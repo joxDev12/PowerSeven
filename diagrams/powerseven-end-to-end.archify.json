@@ -4,7 +4,7 @@
   "meta": {"title":"PowerSeven — mappa end-to-end","quality_profile":"standard","viewBox":[1395,880]},
   "components":[
     {"id":"clients","type":"external","label":"Client WG · 10.10.10.101–107","pos":[0,100],"size":[220,62]},
-    {"id":"hub","type":"security","label":"VPS14 · WireGuard HUB","sublabel":"wg-final · UDP 51820","pos":[245,100],"size":[210,62]},
+    {"id":"hub","type":"security","label":"VPS14 · WireGuard HUB","sublabel":"wg-final · UDP 51820 · SSH 22","pos":[245,100],"size":[210,62]},
     {"id":"desktop","type":"frontend","label":"VPS12 · soc-desktop","sublabel":"RDP · SSH · Wazuh agent","pos":[480,100],"size":[220,62]},
     {"id":"dc","type":"security","label":"VPS13 · DC02","sublabel":"AD DS · DNS · Kerberos · LDAP","pos":[725,100],"size":[240,62]},
     {"id":"adguard","type":"security","label":"AdGuard Home","sublabel":"DNS 53 TCP/UDP","pos":[990,100],"size":[190,62]},
@@ -12,21 +12,30 @@
     {"id":"nginx","type":"frontend","label":"Nginx","sublabel":"HTTPS 80/443 · reverse proxy","pos":[240,350],"size":[220,62]},
     {"id":"apps","type":"backend","label":"Applicazioni web","sublabel":"Nextcloud · Forgejo · Stirling · Scribble · portale","pos":[690,350],"size":[310,62]},
     {"id":"data","type":"database","label":"Data services","sublabel":"PostgreSQL · MariaDB · Redis","pos":[1140,350],"size":[220,62]},
+    {"id":"agentdc","type":"security","label":"DC02 Wazuh Agent","sublabel":"VPS13 · 10.10.10.13","pos":[210,570],"size":[180,52]},
+    {"id":"agent12","type":"security","label":"VPS12 Wazuh Agent","sublabel":"soc-desktop · 10.10.10.12","pos":[465,570],"size":[180,52]},
     {"id":"pter","type":"backend","label":"Pterodactyl / Wings","sublabel":"Panel · queue worker · SFTP","pos":[690,570],"size":[250,62]},
     {"id":"wazuh","type":"security","label":"Wazuh Manager","sublabel":"VPS14 · agenti: VPS12 e DC02","pos":[430,690],"size":[250,62]}
   ],
-  "boundaries":[{"kind":"region","label":"Azure VNet privata + WireGuard 10.10.10.0/24","wraps":["hub","desktop","dc","adguard","nginx","apps","data","pter","wazuh"],"pad":28}],
+  "boundaries":[
+    {"kind":"region","label":"Azure VNet privata · 172.16.0.0/24","wraps":["hub","desktop","dc","adguard","nginx","apps","data","agentdc","agent12","pter","wazuh"],"pad":28},
+    {"kind":"security-group","label":"WireGuard overlay · 10.10.10.0/24","wraps":["hub","desktop","dc"],"pad":12}
+  ],
   "connections":[
-    {"from":"clients","to":"hub","label":"WireGuard UDP 51820","variant":"security","labelAt":[232,190]},
+    {"from":"clients","to":"hub","label":"WireGuard UDP 51820 · SSH 22","variant":"security","labelAt":[120,190]},
     {"from":"hub","to":"desktop","label":"RDP 3389 / SSH 22","variant":"security","labelAt":[468,190]},
+    {"from":"hub","to":"dc","label":"RDP 3389 / SSH 22","variant":"security","fromSide":"top","toSide":"top","via":[[350,60],[845,60]],"labelAt":[600,60]},
     {"from":"desktop","to":"dc","label":"DNS · Kerberos · LDAP","variant":"security","labelAt":[713,190]},
     {"from":"dc","to":"adguard","label":"DNS forwarder","variant":"security","labelAt":[978,190]},
     {"from":"adguard","to":"internet","label":"DNS upstream","variant":"security","labelAt":[1193,190]},
     {"from":"hub","to":"nginx","label":"HTTPS via VPN","variant":"security","fromSide":"bottom","toSide":"top","route":"straight","labelAt":[350,275]},
-    {"from":"nginx","to":"apps","label":"backend locali / container","labelAt":[580,440]},
+    {"from":"nginx","to":"apps","label":"backend locali / container","labelAt":[650,440]},
     {"from":"apps","to":"dc","label":"LDAP: Nextcloud · Forgejo · portale","variant":"security","fromSide":"top","toSide":"bottom","route":"straight","labelAt":[845,275]},
     {"from":"apps","to":"data","label":"PostgreSQL · Redis","labelAt":[1080,320]},
-    {"from":"pter","to":"data","label":"MariaDB: Pterodactyl","labelAt":[1045,600]}
+    {"from":"pter","to":"data","label":"MariaDB: Pterodactyl","labelAt":[1045,600]},
+    {"from":"nginx","to":"pter","label":"reverse proxy","variant":"emphasis","fromSide":"bottom","toSide":"left","via":[[350,500],[650,500],[650,601]],"labelAt":[500,500]},
+    {"from":"agent12","to":"wazuh","label":"1514/TCP","variant":"dashed","fromSide":"bottom","toSide":"top","route":"straight","labelAt":[610,660]},
+    {"from":"agentdc","to":"wazuh","label":"1514/TCP","variant":"dashed","fromSide":"bottom","toSide":"left","via":[[300,650],[400,650],[400,721]],"labelAt":[330,650]}
   ],
   "cards":[
     {"dot":"cyan","title":"Accesso e monitoraggio","items":["Il client entra nel HUB e raggiunge RDP/SSH su VPS12 e DC02","Il HUB instrada HTTPS verso Nginx","VPS12 e DC02 inviano come agenti a Wazuh Manager su 1514/TCP"]},
