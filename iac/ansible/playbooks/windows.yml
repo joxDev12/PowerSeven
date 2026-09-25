@@ -8,4 +8,5 @@
     - windows_firewall
     - openssh_windows
     - common_windows
+    - wireguard_windows
     - wazuh_agent_windows

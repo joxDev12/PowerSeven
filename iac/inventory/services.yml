@@ -252,7 +252,8 @@ services:
     ports: [127.0.0.1:8080/tcp, 2022/tcp]
     configuration_requires: [app_pterodactyl]
     runtime_connects_to: [app_pterodactyl]
-    provision_after: [app_pterodactyl]
+    depends_on: [app_pterodactyl, svc_docker]
+    provision_after: [app_pterodactyl, svc_docker]
     secret_refs: [wings_token]
   - graph_id: svc_pteroq
     host: vps14
@@ -262,12 +263,13 @@ services:
     depends_on: [db_mariadb]
     configuration_requires: [app_pterodactyl]
     runtime_connects_to: [app_pterodactyl]
-    provision_after: [app_pterodactyl]
+    provision_after: [app_pterodactyl, svc_wings]
   - graph_id: app_portal
     host: vps14
     kind: system
     name: azienda-portal
     unit: azienda-portal
+    execution_model: host_gunicorn
     listen: [127.0.0.1:5000]
     depends_on: [id_ldap, db_postgresql]
     database: azienda_lab
@@ -283,6 +285,7 @@ services:
     host: vps14
     kind: monitoring_server
     name: Wazuh Manager
+    execution_model: host_service
     ports: [1514/tcp, 1515/tcp, 55000/tcp]
     depends_on: [mon_indexer]
     persistent: true
@@ -291,12 +294,14 @@ services:
     host: vps14
     kind: monitoring_server
     name: Wazuh Indexer
+    execution_model: host_service
     persistent: true
     secret_refs: [wazuh_indexer_credentials, wazuh_certificates]
   - graph_id: mon_dashboard
     host: vps14
     kind: monitoring_server
     name: Wazuh Dashboard
+    execution_model: host_service
     listen: [127.0.0.1:8443]
     depends_on: [mon_manager, mon_indexer]
     secret_refs: [wazuh_dashboard_credentials, wazuh_certificates]

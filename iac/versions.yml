@@ -4,6 +4,10 @@ policy:
   unknown_versions: REQUIRED_DECISION
   no_floating_production_tags: true
   source_current_versions_are_reference_only: true
+iso_checksums:
+  ubuntu_desktop: REQUIRED_DECISION
+  ubuntu_server: REQUIRED_DECISION
+  windows_server: REQUIRED_DECISION
 versions:
   - name: Ubuntu Desktop
     target_version: "24.04.4"

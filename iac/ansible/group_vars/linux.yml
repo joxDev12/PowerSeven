@@ -4,5 +4,5 @@ linux_packages_base:
   - curl
   - openssh-server
   - sudo
-wireguard_vm_peers_only: true
+wireguard_linux_vm_peers_only: true
 wireguard_host_client_101_cutover: false

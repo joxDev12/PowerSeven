@@ -16,6 +16,7 @@ vms:
     vm_name: PowerSeven-VPS12
     hostname: soc-desktop
     guest_os: Ubuntu Desktop 24.04.4
+    guest_os_type: ubuntu-64
     vcpu: 2
     memory_gib: 2
     disk_gib: 80
@@ -30,6 +31,7 @@ vms:
     vm_name: PowerSeven-VPS13
     hostname: DC02
     guest_os: Windows Server 2022 Datacenter
+    guest_os_type: windows9srv-64
     vcpu: 2
     memory_gib: 3
     disk_gib: 80
@@ -44,6 +46,7 @@ vms:
     vm_name: PowerSeven-VPS14
     hostname: soc-server
     guest_os: Ubuntu Server 24.04.4
+    guest_os_type: ubuntu-64
     vcpu: 4
     memory_gib: 6
     disk_gib: 160

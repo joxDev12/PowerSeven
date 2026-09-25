@@ -1,0 +1,10 @@
+schema_version: 1
+purpose: private_manual_vm_paths_for_validate_vms
+vmx_paths:
+  vps12: <VM_STORAGE_ROOT>/PowerSeven/VPS12/VPS12.vmx
+  vps13: <VM_STORAGE_ROOT>/PowerSeven/VPS13/VPS13.vmx
+  vps14: <VM_STORAGE_ROOT>/PowerSeven/VPS14/VPS14.vmx
+iso_paths:
+  ubuntu_desktop: <UBUNTU_DESKTOP_ISO>
+  windows_server: <WINDOWS_SERVER_2022_ISO>
+  ubuntu_server: <UBUNTU_SERVER_ISO>

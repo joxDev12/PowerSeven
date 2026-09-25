@@ -4,7 +4,7 @@
   gather_facts: false
   roles:
     - common_linux
-    - wireguard
+    - wireguard_linux
     - docker
     - postgresql
     - mariadb
@@ -15,7 +15,9 @@
     - nextcloud
     - forgejo
     - stirling
-    - pterodactyl
+    - pterodactyl_panel
+    - wings
+    - pteroq
     - portal
     - scribble
     - wazuh_server

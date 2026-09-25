@@ -2,7 +2,7 @@
 
 Questo catalogo è solo dichiarativo. Non crea VM, non installa pacchetti e non
 contiene segreti. La fonte primaria è [`../graph/powerseven.graph.json`](../graph/powerseven.graph.json);
-i file YAML sono la proiezione operativa usabile in futuro da renderer VMware,
+i file YAML sono la proiezione operativa usabile in futuro da bootstrap,
 Ansible, PowerShell e test di accettazione.
 
 Il catalogo separa `source_current: azure` da `target_local: vmware`. Nessun
@@ -40,7 +40,7 @@ workflow fragile. Potrà essere rivalutato se l'host passerà a vSphere/ESXi.
 
 ## Struttura target
 
-- `vmware/`: definizioni VM, rete VMnet, storage root parametrico e lifecycle futuro.
+- `vmware/`: specifica VM, rete VMnet, storage root parametrico e validatore post-GUI.
 - `linux/`: autoinstall/cloud-init e contratto bootstrap Ubuntu.
 - `windows/`: unattend, PowerShell e contratto bootstrap Windows.
 - `ansible/`: inventory, variabili, dependency map, playbook e role contracts.
@@ -50,7 +50,7 @@ workflow fragile. Potrà essere rivalutato se l'host passerà a vSphere/ESXi.
 Separazione obbligatoria:
 
 ```text
-VM CREATION             vmware/
+VM SPECIFICATION        vmware/
 OS BOOTSTRAP            linux/ windows/
 CONFIGURATION           ansible/
 APPLICATION DEPLOYMENT  docker/ + ansible/

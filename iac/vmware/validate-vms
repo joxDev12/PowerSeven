@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Read-only validator for VMs created manually in VMware Workstation."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+
+PASS = WARN = FAIL = 0
+
+
+def report(level: str, label: str, detail: str) -> None:
+    global PASS, WARN, FAIL
+    print(f"{level}: {label}: {detail}")
+    if level == "PASS":
+        PASS += 1
+    elif level == "WARN":
+        WARN += 1
+    else:
+        FAIL += 1
+
+
+def expand(value: str) -> Path:
+    value = os.path.expandvars(os.path.expanduser(value))
+    storage_root = os.environ.get("VM_STORAGE_ROOT")
+    if "<VM_STORAGE_ROOT>" in value and storage_root:
+        value = value.replace("<VM_STORAGE_ROOT>", storage_root)
+    return Path(value)
+
+
+def parse_vmx(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = re.match(r"^\s*([^#=\s]+)\s*=\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        value = match.group(2)
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1].replace('\\"', '"')
+        values[match.group(1)] = value
+    return values
+
+
+def disk_capacity_gib(vmdk: Path) -> float | None:
+    if not vmdk.is_file():
+        return None
+    text = vmdk.read_text(encoding="utf-8", errors="replace")
+    sectors = [int(item) for item in re.findall(r"^RW\s+(\d+)\s+", text, re.MULTILINE)]
+    if not sectors:
+        return None
+    return sum(sectors) * 512 / (1024**3)
+
+
+def running_vmx(vmrun: str) -> set[str] | None:
+    try:
+        result = subprocess.run(
+            [vmrun, "-T", "ws", "list"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        report("FAIL", "power-state", f"cannot execute vmrun: {exc}")
+        return None
+    if result.returncode != 0:
+        report("FAIL", "power-state", result.stderr.strip() or "vmrun list failed")
+        return None
+    paths = set()
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.endswith(".vmx"):
+            paths.add(str(Path(line).resolve()))
+    return paths
+
+
+def validate_vm(vm: dict, vmx_path: Path, iso_paths: dict[str, str], running: set[str] | None) -> None:
+    vm_id = vm["id"]
+    label = vm["vm_name"]
+    if not vmx_path.is_file() or not os.access(vmx_path, os.R_OK):
+        report("FAIL", f"{vm_id}.path", f"VMX missing/unreadable: {vmx_path}")
+        return
+    report("PASS", f"{vm_id}.path", "VMX exists and is readable")
+    values = parse_vmx(vmx_path)
+
+    if values.get("displayName") == label:
+        report("PASS", f"{vm_id}.name", label)
+    else:
+        report("FAIL", f"{vm_id}.name", f"expected {label}, got {values.get('displayName', '<missing>')}")
+
+    if values.get("numvcpus") == str(vm["vcpu"]):
+        report("PASS", f"{vm_id}.vcpu", values["numvcpus"])
+    else:
+        report("FAIL", f"{vm_id}.vcpu", f"expected {vm['vcpu']}, got {values.get('numvcpus', '<missing>')}")
+
+    if values.get("memsize") == str(vm["memory_gib"] * 1024):
+        report("PASS", f"{vm_id}.ram", f"{values['memsize']} MiB")
+    else:
+        report("FAIL", f"{vm_id}.ram", f"expected {vm['memory_gib'] * 1024} MiB, got {values.get('memsize', '<missing>')}")
+
+    if values.get("guestOS") == vm["guest_os_type"]:
+        report("PASS", f"{vm_id}.guest-os", values["guestOS"])
+    else:
+        report("FAIL", f"{vm_id}.guest-os", f"expected {vm['guest_os_type']}, got {values.get('guestOS', '<missing>')}")
+
+    active_nics = []
+    for key, value in values.items():
+        match = re.match(r"^(ethernet\d+)\.present$", key)
+        if match and value.upper() == "TRUE":
+            active_nics.append(match.group(1))
+    if len(active_nics) != 1:
+        report("FAIL", f"{vm_id}.nic-count", f"expected one active NIC, got {active_nics}")
+    else:
+        nic = active_nics[0]
+        if values.get(f"{nic}.networkName") == "VMnet8" and values.get(f"{nic}.connectionType") == "custom":
+            report("PASS", f"{vm_id}.nic", "one active NIC connected to VMnet8")
+        else:
+            report("FAIL", f"{vm_id}.nic", f"expected custom VMnet8, got {values.get(f'{nic}.networkName', '<missing>')}")
+
+    active_device_keys = {
+        key for key, value in values.items()
+        if key.endswith(".present") and value.upper() == "TRUE"
+    }
+    unexpected_nics = sorted(
+        key for key in active_device_keys
+        if key.startswith("ethernet") and key != "ethernet0.present"
+    )
+    if unexpected_nics:
+        report("FAIL", f"{vm_id}.unexpected-config", f"unexpected active NICs: {unexpected_nics}")
+    else:
+        report("PASS", f"{vm_id}.unexpected-config", "no unexpected active network adapter")
+
+    disk_files = []
+    for key, value in values.items():
+        if re.match(r"^(scsi|sata|nvme|ide)\d+:\d+\.fileName$", key) and value.lower().endswith(".vmdk"):
+            disk_files.append(vmx_path.parent / value if not Path(value).is_absolute() else Path(value))
+    capacities = [disk_capacity_gib(path) for path in disk_files]
+    if not disk_files or any(capacity is None for capacity in capacities):
+        report("FAIL", f"{vm_id}.disk", "VMDK descriptor/capacity not readable")
+    else:
+        total = sum(capacities)
+        if abs(total - float(vm["disk_gib"])) < 0.1:
+            report("PASS", f"{vm_id}.disk", f"{total:.1f} GiB")
+        else:
+            report("FAIL", f"{vm_id}.disk", f"expected {vm['disk_gib']} GiB, got {total:.1f} GiB")
+
+    iso_ref = vm["iso_ref"]
+    configured_iso = iso_paths.get(iso_ref)
+    if not configured_iso or configured_iso.startswith("<"):
+        report("FAIL", f"{vm_id}.iso", f"ISO path for {iso_ref} not configured")
+    else:
+        expected_iso = expand(configured_iso).resolve()
+        cdroms = [value for key, value in values.items() if key.endswith(".fileName") and value.lower().endswith((".iso", ".img"))]
+        actual = [(vmx_path.parent / value if not Path(value).is_absolute() else Path(value)).resolve() for value in cdroms]
+        if expected_iso in actual and any(values.get(key) == "cdrom-image" for key in values if key.endswith(".deviceType")):
+            report("PASS", f"{vm_id}.iso", "expected ISO is mounted")
+        else:
+            report("FAIL", f"{vm_id}.iso", "expected ISO is not mounted")
+
+    if running is None:
+        return
+    if str(vmx_path.resolve()) in running:
+        report("FAIL", f"{vm_id}.power", "VM is running; bootstrap requires powered off")
+    else:
+        report("PASS", f"{vm_id}.power", "VM not present in vmrun running list")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Read-only validator for manually created PowerSeven VMs")
+    parser.add_argument("--spec", default=str(Path(__file__).with_name("vm-definitions.yml")))
+    parser.add_argument("--paths-file", default=os.environ.get("POWERSEVEN_VM_PATHS_FILE"))
+    parser.add_argument("--vmrun", default="vmrun")
+    args = parser.parse_args()
+    if not args.paths_file:
+        report("FAIL", "paths-file", "provide --paths-file with manual VMX paths")
+        print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
+        return 2
+    try:
+        spec = yaml.safe_load(Path(args.spec).read_text(encoding="utf-8"))
+        paths_config = yaml.safe_load(Path(args.paths_file).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        report("FAIL", "configuration", str(exc))
+        print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
+        return 2
+    vms = spec["vms"]
+    path_map = paths_config.get("vmx_paths", {})
+    iso_paths = paths_config.get("iso_paths", {})
+    if len({vm["id"] for vm in vms}) != len(vms) or len({vm["vm_name"] for vm in vms}) != len(vms):
+        report("FAIL", "definition-duplicates", "duplicate VM id or name")
+    running = running_vmx(args.vmrun)
+    for vm in vms:
+        if vm["id"] not in path_map:
+            report("FAIL", f"{vm['id']}.path", "missing from paths file")
+            continue
+        path = expand(path_map[vm["id"]])
+        validate_vm(vm, path, iso_paths, running)
+    print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
+    return 2 if FAIL else 1 if WARN else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

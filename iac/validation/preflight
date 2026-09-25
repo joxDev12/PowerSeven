@@ -226,6 +226,50 @@ def check_vm_resources(vms):
         report("PASS", "vm-resources", f"3 VMs; totals {totals}")
 
 
+def check_vmware_definitions(vms):
+    vmware = IAC / "vmware"
+    create_vms = vmware / "create-vms"
+    validator = vmware / "validate-vms"
+    if create_vms.exists():
+        report("FAIL", "vmware-safety", "operational create-vms must not exist")
+    else:
+        report("PASS", "vmware-safety", "no operational VM creation command")
+    if validator.is_file() and validator.stat().st_mode & 0o111:
+        report("PASS", "vmware-validator", "validate-vms exists and is executable")
+    else:
+        report("FAIL", "vmware-validator", "read-only validate-vms is missing or not executable")
+    generated = sorted(vmware.rglob("*.vmx")) + sorted(vmware.rglob("*.vmdk"))
+    if generated:
+        report("FAIL", "vmware-artifacts", "generated VM artifacts found: " + ", ".join(str(p.relative_to(ROOT)) for p in generated))
+    else:
+        report("PASS", "vmware-artifacts", "no VMX/VMDK artifacts in repository")
+
+    entries = vms.get("vms", [])
+    ids = [item.get("id") for item in entries]
+    names = [item.get("vm_name") for item in entries]
+    ips = [item.get("nic", {}).get("underlay_ip") for item in entries]
+    if len(entries) != 3 or len(set(ids)) != len(ids) or len(set(names)) != len(names) or len(set(ips)) != len(ips):
+        report("FAIL", "vmware-definitions", "three unique VM ids, names and underlay IPs are required")
+        return
+    errors = []
+    for item in entries:
+        if item.get("state") != "definition_only":
+            errors.append(f"{item.get('id')}: state")
+        if item.get("nic", {}).get("network") != "VMnet8":
+            errors.append(f"{item.get('id')}: network")
+        if not str(item.get("vmx_path", "")).startswith("<VM_STORAGE_ROOT>/"):
+            errors.append(f"{item.get('id')}: vmx_path must be parameterized")
+        if item.get("iso_ref") not in vms.get("isos", {}):
+            errors.append(f"{item.get('id')}: iso_ref")
+    network = vms.get("network", {})
+    if network.get("name") != "VMnet8" or network.get("cidr") != "192.168.214.0/24" or network.get("gateway") != "192.168.214.2":
+        errors.append("network: VMnet8 target")
+    if errors:
+        report("FAIL", "vmware-definitions", "; ".join(errors))
+    else:
+        report("PASS", "vmware-definitions", "manual GUI specification is complete and parameterized")
+
+
 def contains_azure(value):
     return isinstance(value, str) and "azure" in value.lower()
 
@@ -265,6 +309,7 @@ def main() -> int:
     check_dns(by_name["dns.yml"])
     check_ports(by_name["services.yml"])
     check_vm_resources(load_yaml(IAC / "vmware" / "vm-definitions.yml"))
+    check_vmware_definitions(load_yaml(IAC / "vmware" / "vm-definitions.yml"))
     check_scope_separation(inventories)
     check_compose()
     print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")

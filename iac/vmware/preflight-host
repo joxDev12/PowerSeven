@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# Read-only VMware host preflight. It never creates, registers or changes VMs.
+set -u
+ulimit -c 0 2>/dev/null || true
+
+storage_root="${VM_STORAGE_ROOT:-}"
+ubuntu_desktop_iso="${UBUNTU_DESKTOP_ISO:-}"
+ubuntu_server_iso="${UBUNTU_SERVER_ISO:-}"
+windows_server_iso="${WINDOWS_SERVER_2022_ISO:-}"
+networking_file="${VMWARE_NETWORKING_FILE:-/etc/vmware/networking}"
+dhcp_file="${VMWARE_VMNET8_DHCP_FILE:-/etc/vmware/vmnet8/dhcpd/dhcpd.conf}"
+pass_count=0
+warn_count=0
+fail_count=0
+
+usage() {
+  cat <<'EOF'
+Usage: preflight-host [options]
+  --storage-root PATH
+  --ubuntu-desktop-iso PATH
+  --ubuntu-server-iso PATH
+  --windows-server-iso PATH
+  --help
+
+Environment equivalents: VM_STORAGE_ROOT, UBUNTU_DESKTOP_ISO,
+UBUNTU_SERVER_ISO, WINDOWS_SERVER_2022_ISO.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --storage-root) storage_root="${2:-}"; shift 2 ;;
+    --ubuntu-desktop-iso) ubuntu_desktop_iso="${2:-}"; shift 2 ;;
+    --ubuntu-server-iso) ubuntu_server_iso="${2:-}"; shift 2 ;;
+    --windows-server-iso) windows_server_iso="${2:-}"; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "FAIL: unknown argument: $1"; exit 2 ;;
+  esac
+done
+
+say() {
+  local level="$1" label="$2" detail="$3"
+  printf '%s: %s: %s\n' "$level" "$label" "$detail"
+  case "$level" in
+    PASS) pass_count=$((pass_count + 1)) ;;
+    WARN) warn_count=$((warn_count + 1)) ;;
+    FAIL) fail_count=$((fail_count + 1)) ;;
+  esac
+}
+
+probe() {
+  local label="$1"; shift
+  local output rc
+  output="$({ "$@"; } 2>&1 | head -40)"
+  rc=${PIPESTATUS[0]}
+  printf '%s\n' "--- capability: $label ---" >&2
+  printf '%s\n' "$output" >&2
+  return "$rc"
+}
+
+check_command() {
+  local command_name="$1"
+  if command -v "$command_name" >/dev/null 2>&1; then
+    say PASS "command:$command_name" "$(command -v "$command_name")"
+  else
+    say WARN "command:$command_name" "not installed"
+  fi
+}
+
+printf '%s\n' 'PowerSeven VMware host preflight (READ-ONLY)'
+for command_name in vmware vmrun vmware-vdiskmanager vmware-installer vmware-netcfg ovftool; do
+  check_command "$command_name"
+done
+
+if command -v vmware >/dev/null 2>&1; then
+  probe vmware-version vmware -v || say WARN vmware-capability 'version command failed'
+fi
+if command -v vmware-installer >/dev/null 2>&1; then
+  probe vmware-installer-list vmware-installer -l || say WARN vmware-capability 'installer listing failed'
+fi
+if command -v vmrun >/dev/null 2>&1; then
+  probe vmrun-usage vmrun || say WARN vmrun-capability 'usage probe failed'
+fi
+if command -v vmware-vdiskmanager >/dev/null 2>&1; then
+  probe vdiskmanager-usage vmware-vdiskmanager || say WARN vdiskmanager-capability 'usage probe failed'
+fi
+if command -v vmware-netcfg >/dev/null 2>&1; then
+  probe vmware-netcfg-help timeout 5s vmware-netcfg --help || say WARN vmnet-capability 'help probe failed; no network change attempted'
+fi
+if command -v ovftool >/dev/null 2>&1; then
+  probe ovftool-help ovftool --help || say WARN ovftool-capability 'help probe failed'
+fi
+
+if [[ -z "$storage_root" || "$storage_root" == \<*\> ]]; then
+  say FAIL storage-root 'not supplied; use --storage-root or VM_STORAGE_ROOT'
+elif [[ ! -d "$storage_root" || ! -r "$storage_root" ]]; then
+  say FAIL storage-root 'directory missing or unreadable'
+else
+  available_kib=$(df -Pk "$storage_root" | awk 'NR==2 {print $4}')
+  if [[ "$available_kib" =~ ^[0-9]+$ ]]; then
+    available_gib=$((available_kib / 1024 / 1024))
+    if (( available_gib >= 320 )); then
+      say PASS storage-space "$available_gib GiB available; 320 GiB target capacity"
+    else
+      say FAIL storage-space "$available_gib GiB available; 320 GiB required"
+    fi
+  else
+    say FAIL storage-space 'df result unavailable'
+  fi
+  if [[ -e "$storage_root/PowerSeven" ]]; then
+    say FAIL overwrite-guard 'PowerSeven target directory already exists'
+  else
+    say PASS overwrite-guard 'PowerSeven target directory does not exist'
+  fi
+fi
+
+check_iso() {
+  local label="$1" path="$2"
+  if [[ -z "$path" || "$path" == \<*\> ]]; then
+    say FAIL "iso:$label" 'not supplied'
+  elif [[ -f "$path" && -r "$path" ]]; then
+    say PASS "iso:$label" 'present and readable'
+  else
+    say FAIL "iso:$label" 'missing or unreadable'
+  fi
+}
+check_iso ubuntu-desktop "$ubuntu_desktop_iso"
+check_iso ubuntu-server "$ubuntu_server_iso"
+check_iso windows-server-2022 "$windows_server_iso"
+
+if [[ ! -r "$networking_file" ]]; then
+  say FAIL vmnet8-config 'VMware networking file missing or unreadable'
+else
+  subnet_ok=$(grep -E '^answer VNET_8_HOSTONLY_SUBNET 192\.168\.214\.0$' "$networking_file" || true)
+  mask_ok=$(grep -E '^answer VNET_8_HOSTONLY_NETMASK 255\.255\.255\.0$' "$networking_file" || true)
+  nat_ok=$(grep -E '^answer VNET_8_NAT yes$' "$networking_file" || true)
+  if [[ -n "$subnet_ok" && -n "$mask_ok" && -n "$nat_ok" ]]; then
+    say PASS vmnet8-config 'VMnet8 NAT subnet is 192.168.214.0/24'
+  else
+    say FAIL vmnet8-config 'subnet or NAT mode does not match 192.168.214.0/24'
+  fi
+fi
+if ip link show vmnet8 >/dev/null 2>&1 && ip -4 addr show dev vmnet8 | grep -q '192\.168\.214\.1/24'; then
+  say PASS vmnet8-interface 'vmnet8 exists with 192.168.214.1/24'
+else
+  say FAIL vmnet8-interface 'vmnet8 interface or address is not present'
+fi
+if [[ ! -r "$dhcp_file" ]]; then
+  say WARN vmnet8-gateway 'DHCP configuration unreadable; gateway not confirmed'
+elif grep -Eq 'option routers 192\.168\.214\.2;' "$dhcp_file"; then
+  say PASS vmnet8-gateway 'NAT gateway is 192.168.214.2'
+else
+  say FAIL vmnet8-gateway 'NAT gateway is not 192.168.214.2'
+fi
+
+check_ip() {
+  local address="$1"
+  if ip -4 addr show | grep -Eq "inet ${address}(/| )"; then
+    say FAIL "ip:$address" 'already assigned locally'
+  elif ip -4 neigh show "$address" 2>/dev/null | grep -Eq 'lladdr|REACHABLE|STALE|DELAY|PROBE'; then
+    say WARN "ip:$address" 'neighbor entry exists; address not confirmed free'
+  elif command -v ping >/dev/null 2>&1 && ping -c 1 -W 1 "$address" >/dev/null 2>&1; then
+    say FAIL "ip:$address" 'ICMP response received'
+  else
+    say WARN "ip:$address" 'no conflict observed; availability is not provable before VM creation'
+  fi
+}
+for address in 192.168.214.12 192.168.214.13 192.168.214.14; do
+  check_ip "$address"
+done
+
+if command -v vmrun >/dev/null 2>&1; then
+  running_vms=$(vmrun -T ws list 2>/dev/null || true)
+  if grep -Eiq 'PowerSeven|VPS12|VPS13|VPS14|soc-desktop|DC02|soc-server' <<<"$running_vms"; then
+    say FAIL vm-registration 'PowerSeven VM appears in vmrun running list'
+  else
+    say PASS vm-registration 'no PowerSeven VM is running'
+  fi
+  say WARN vm-registration 'vmrun cannot enumerate powered-off registered VMs; path scan is required'
+else
+  say FAIL vm-registration 'vmrun unavailable'
+fi
+if [[ -n "$storage_root" && -d "$storage_root" ]]; then
+  existing_vmx=$(find "$storage_root" -maxdepth 4 -type f -name '*.vmx' 2>/dev/null | grep -Ei 'PowerSeven|VPS12|VPS13|VPS14|soc-desktop|DC02|soc-server' || true)
+  if [[ -n "$existing_vmx" ]]; then
+    say FAIL overwrite-guard 'matching VMX path already exists'
+  else
+    say PASS overwrite-guard 'no matching PowerSeven VMX path found'
+  fi
+fi
+
+printf 'SUMMARY: PASS=%s WARN=%s FAIL=%s\n' "$pass_count" "$warn_count" "$fail_count"
+if (( fail_count > 0 )); then exit 2; fi
+if (( warn_count > 0 )); then exit 1; fi
+exit 0

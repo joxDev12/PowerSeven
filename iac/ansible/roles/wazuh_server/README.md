@@ -1,4 +1,5 @@
 # wazuh_server
 
-Scope: fresh Manager, Indexer and Dashboard stack with empty indexes. Inputs:
-version matrix, TLS refs and overlay endpoint. Requires: `docker`, `wireguard`.
+Scope: host services for fresh Manager, Indexer and Dashboard with empty
+indexes. Inputs: version matrix, TLS refs and overlay endpoint. Requires:
+`common_linux`, `wireguard_linux`; Docker is not a prerequisite.

@@ -1,1 +1,6 @@
 graphify-out/
+
+# Local VMware path/configuration files; keep the example template tracked.
+iac/vmware/manual-vm-paths.yml
+iac/vmware/*.local.yml
+iac/vmware/*.local.env

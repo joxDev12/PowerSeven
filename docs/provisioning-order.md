@@ -16,13 +16,16 @@ Obiettivo: predisporre solo prerequisiti host.
 
 Successo: rete e layout dichiarati; nessuna VM necessaria.
 
-## PHASE 1 — creazione delle tre VM
+## PHASE 1 — creazione manuale delle tre VM
 
-Creare in parallelo VPS12, VPS13, VPS14 con risorse da
-[local-architecture.md](local-architecture.md), una NIC VMnet8 NAT e dischi
-nuovi. Non creare snapshot.
+Creare manualmente in parallelo VPS12, VPS13, VPS14 dalla GUI VMware
+Workstation Pro, con risorse da [local-architecture.md](local-architecture.md),
+una NIC VMnet8 NAT, ISO e dischi nuovi. Verificare poi con
+`iac/vmware/validate-vms`. L'IaC non genera VMX/VMDK e non registra VM. Non
+creare snapshot.
 
-Rollback fase: eliminare solo VM appena create, se ancora vuote e non usate.
+Rollback fase: rimuovere manualmente solo VM appena create, se ancora vuote e
+non usate; nessun comando IaC esegue questa operazione.
 
 ## PHASE 2 — bootstrap OS
 

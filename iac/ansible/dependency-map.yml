@@ -8,24 +8,48 @@ roles:
   windows_firewall: {requires: [ad_ds, dns]}
   openssh_windows: {requires: [windows_firewall]}
   common_windows: {requires: [openssh_windows]}
-  wireguard: {requires: [common_linux]}
+  wireguard_linux: {requires: [common_linux]}
+  wireguard_windows: {requires: [common_windows]}
   docker: {requires: [common_linux]}
   postgresql: {requires: [common_linux]}
   mariadb: {requires: [common_linux]}
   redis: {requires: [common_linux]}
   adguard: {requires: [docker]}
-  sssd: {requires: [ad_ds, dns, wireguard]}
-  nginx: {requires: [docker, wireguard]}
-  nextcloud: {requires: [docker, postgresql, sssd]}
-  forgejo: {requires: [docker, postgresql, sssd]}
+  sssd: {requires: [common_linux]}
+  nginx: {requires: [common_linux, wireguard_linux]}
+  nextcloud: {requires: [docker, postgresql]}
+  forgejo: {requires: [docker, postgresql]}
   stirling: {requires: [docker]}
-  pterodactyl: {requires: [docker, mariadb]}
-  portal: {requires: [docker, postgresql, nginx]}
+  pterodactyl_panel: {requires: [common_linux, mariadb]}
+  wings: {requires: [common_linux, docker, pterodactyl_panel, wireguard_linux]}
+  pteroq: {requires: [common_linux, pterodactyl_panel, wings]}
+  portal: {requires: [common_linux, postgresql]}
   scribble: {requires: [docker, nginx]}
-  wazuh_server: {requires: [docker, wireguard]}
+  wazuh_server: {requires: [common_linux, wireguard_linux]}
   xrdp: {requires: [common_linux, sssd]}
-  wazuh_agent: {requires: [common_linux, wireguard, wazuh_server]}
-  wazuh_agent_windows: {requires: [common_windows, wireguard, wazuh_server]}
+  wazuh_agent: {requires: [common_linux, wireguard_linux, wazuh_server]}
+  wazuh_agent_windows: {requires: [common_windows, wireguard_windows, wazuh_server]}
+cross_host_requires:
+  nextcloud:
+    - service: id_ldap
+      provider_host: vps13
+      consumer_host: vps14
+  forgejo:
+    - service: id_ldap
+      provider_host: vps13
+      consumer_host: vps14
+  sssd:
+    - services: [id_ad_ds, id_dns_dc02, id_kerberos, id_ldap]
+      provider_host: vps13
+      consumer_host: vps12
+  wazuh_agent:
+    - service: wazuh_server
+      provider_host: vps14
+      consumer_host: vps12
+  wazuh_agent_windows:
+    - service: wazuh_server
+      provider_host: vps14
+      consumer_host: vps13
 provisioning_notes:
   pterodactyl_panel_before_wings: true
   wings_runtime_connects_to_panel: true

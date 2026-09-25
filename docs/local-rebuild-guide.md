@@ -195,13 +195,13 @@ HTTPS via tunnel. Il test client `.101` è esclusivamente WG-03 di cutover.
 | Fase | Componente IaC futuro |
 |---|---|
 | 0 | `iac/vmware/` e `iac/validation/preflight` |
-| 1 | `iac/vmware/vm-definitions.yml` + renderer VMX |
+| 1 | creazione manuale VMware GUI + `iac/vmware/validate-vms` |
 | 2 | `iac/linux/autoinstall/`, `iac/windows/autounattend.xml` |
 | 3 | `iac/linux/cloud-init/`, `iac/windows/bootstrap.ps1` |
 | 4-6 | Ansible `ad_ds`, `dns`, `adguard` |
 | 7 | Ansible `wireguard` + acceptance WG-01/WG-02 |
 | 8-9 | Ansible database/CA + `iac/docker/compose.yml` |
-| 10-11 | ruoli Ansible `pterodactyl`, `nginx`, `portal`, `scribble` |
+| 10-11 | ruoli Ansible `pterodactyl_panel`, `wings`, `pteroq`, `nginx`, `portal`, `scribble` |
 | 12-13 | ruoli `wazuh_server`, `wazuh_agent*`, `xrdp`, `sssd` |
 | 14-15 | `iac/validation/` + acceptance E2E; WG-03 solo cutover |
 
