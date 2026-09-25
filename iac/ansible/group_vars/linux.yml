@@ -1,0 +1,8 @@
+linux_bootstrap_user: powerseven-bootstrap
+linux_packages_base:
+  - ca-certificates
+  - curl
+  - openssh-server
+  - sudo
+wireguard_vm_peers_only: true
+wireguard_host_client_101_cutover: false

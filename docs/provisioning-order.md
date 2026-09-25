@@ -9,7 +9,7 @@ esplicito. Tutto parte vuoto.
 Obiettivo: predisporre solo prerequisiti host.
 
 - verificare Workstation, ISO, spazio `<VM_STORAGE_ROOT>` e collisioni CIDR;
-- usare VMnet8 NAT osservato `192.168.214.0/24`;
+- usare il target approvato VMnet8 NAT `192.168.214.0/24`;
 - assegnare `.12`, `.13`, `.14` fuori DHCP;
 - decidere owner UDP `51820` senza modificare ancora il sistema;
 - definire secret refs locali.
@@ -59,6 +59,10 @@ VPS14 temporary resolver: 192.168.214.2
 VPS12 temporary resolver: 192.168.214.2
 ```
 
+Il trasporto DNS/AD resta underlay: dopo il bootstrap VPS12/VPS14 usano
+`192.168.214.13` e DC02 inoltra a AdGuard `192.168.214.14`. I record
+applicativi `lab.test` puntano invece all'overlay `10.10.10.14`.
+
 Test: `Get-ADDomain`, zone AD, record `dc02`, Kerberos ticket e query esterna.
 
 Rollback fase: rimuovere solo il nuovo dominio dalla VM locale; Azure non è
@@ -68,7 +72,8 @@ coinvolto.
 
 Configurare VPS14 con resolver temporaneo. Installare Docker, AdGuard e
 WireGuard prerequisites. Avviare AdGuard con nuova configurazione vuota su
-`192.168.214.14:53` o overlay secondo design.
+`192.168.214.14:53` sull'underlay; i record applicativi continueranno a
+puntare a `10.10.10.14` sull'overlay.
 
 Non rendere ancora DC02 dipendente da AdGuard.
 
@@ -89,12 +94,13 @@ senza dipendere da DC02; il forwarder finale viene cambiato dopo.
 
 ## PHASE 7 — WireGuard
 
-Configurare prima hub VPS14, poi peer VPS12/VPS13, poi client esterni. Usare
+Configurare prima hub VPS14, poi solo peer VM VPS12/VPS13. Usare
 nuove chiavi. Nome unit non assunto: verificare se l'installazione usa
 `wg-quick@wg-final` o altro prima di automatizzare.
 
-Test: handshake, ping overlay, route tra peer, UDP `51820`. Non cambiare il
-WireGuard host `giorgio` durante questo progetto.
+Test: handshake, ping overlay, route tra peer, UDP `51820`. Non cambiare né
+collegare il client WireGuard host `.101` durante questa fase; WG-03 è un test
+di cutover finale separato.
 
 ## PHASE 8 — identità avanzata e certificati
 

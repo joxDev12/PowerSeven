@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Read-only PowerSeven IaC preflight; never creates or changes resources."""
+
+from __future__ import annotations
+
+import ipaddress
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+
+ROOT = Path(__file__).resolve().parents[2]
+IAC = ROOT / "iac"
+GRAPH = ROOT / "graph" / "powerseven.graph.json"
+FAIL = 0
+WARN = 0
+PASS = 0
+
+
+def report(level: str, label: str, detail: str) -> None:
+    global FAIL, WARN, PASS
+    print(f"{level}: {label}: {detail}")
+    if level == "FAIL":
+        FAIL += 1
+    elif level == "WARN":
+        WARN += 1
+    elif level == "PASS":
+        PASS += 1
+
+
+def load_yaml(path: Path):
+    if yaml is None:
+        raise RuntimeError("PyYAML unavailable")
+    with path.open(encoding="utf-8") as stream:
+        return yaml.safe_load(stream)
+
+
+def walk(value, key=None):
+    yield key, value
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            yield from walk(child_value, child_key)
+    elif isinstance(value, list):
+        for child_value in value:
+            yield from walk(child_value, key)
+
+
+def read_text_files():
+    ignored_suffixes = {".html", ".png", ".jpg", ".jpeg", ".webp", ".woff", ".pyc"}
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        if path.suffix.lower() in ignored_suffixes:
+            continue
+        try:
+            yield path, path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+
+
+def check_yaml_json():
+    if yaml is None:
+        report("FAIL", "yaml", "PyYAML is required; install nothing automatically")
+    else:
+        for path in sorted(IAC.rglob("*.yml")) + sorted(IAC.rglob("*.yaml")):
+            try:
+                load_yaml(path)
+            except Exception as exc:  # syntax errors are the useful result here
+                report("FAIL", "yaml", f"{path.relative_to(ROOT)}: {exc}")
+        report("PASS", "yaml", "all iac YAML parsed")
+
+    json_files = sorted(ROOT.glob("graph/*.json")) + sorted(ROOT.glob("diagrams/*.json"))
+    for path in json_files:
+        try:
+            with path.open(encoding="utf-8") as stream:
+                json.load(stream)
+        except Exception as exc:
+            report("FAIL", "json", f"{path.relative_to(ROOT)}: {exc}")
+    if json_files:
+        report("PASS", "json", f"parsed {len(json_files)} JSON files")
+
+
+def check_graph_references(inventories, graph):
+    node_ids = {node.get("id") for node in graph.get("nodes", [])}
+    for path, data in inventories:
+        for key, value in walk(data):
+            if key != "graph_id" or not isinstance(value, str):
+                continue
+            if value in node_ids:
+                continue
+            if value.startswith("legacy_"):
+                report("WARN", "graph-reference", f"{path.relative_to(ROOT)}: legacy id {value}")
+            else:
+                report("FAIL", "graph-reference", f"{path.relative_to(ROOT)}: missing node {value}")
+    report("PASS", "graph-reference", f"checked {len(node_ids)} graph nodes")
+
+
+def check_ip_and_cidr(hosts, networks):
+    addresses = {}
+    for host_id, host in hosts["hosts"].items():
+        target_ip = host["target_local"]["underlay_ip"]
+        addresses[f"{host_id}.underlay"] = ipaddress.ip_address(target_ip)
+        for interface in host.get("interfaces", []):
+            if interface.get("network") == "wireguard":
+                addresses[f"{host_id}.overlay"] = ipaddress.ip_interface(interface["address"]).ip
+    seen = {}
+    for label, address in addresses.items():
+        if address in seen:
+            report("FAIL", "duplicate-ip", f"{label} and {seen[address]} use {address}")
+        seen[address] = label
+    report("PASS", "duplicate-ip", f"checked {len(addresses)} target host addresses")
+
+    cidrs = {
+        "underlay": networks["target_local"]["underlay"]["cidr"],
+        "overlay": networks["target_local"]["overlay"]["cidr"],
+    }
+    for item in networks.get("container_networks", {}).get("networks", []):
+        cidrs[f"docker:{item['name']}"] = item["cidr"]
+    parsed = {name: ipaddress.ip_network(cidr, strict=False) for name, cidr in cidrs.items()}
+    names = list(parsed)
+    for index, left_name in enumerate(names):
+        for right_name in names[index + 1 :]:
+            if parsed[left_name].overlaps(parsed[right_name]):
+                report("FAIL", "cidr-overlap", f"{left_name} overlaps {right_name}")
+    report("PASS", "cidr-overlap", f"checked {len(parsed)} target networks")
+
+
+def check_secrets():
+    secret_pattern = re.compile(
+        r"-----BEGIN .*PRIVATE KEY-----|"
+        r"(?:password|passwd|(?<![A-Za-z])token|api[_-]?key|private[_-]?key)\s*[:=]\s*"
+        r"(?!(?:[\"']?REQUIRED_SECRET|[\"']?REQUIRED_DECISION|[\"']?<|[\"']?\$\{|[\"']?not in repository))"
+        r"(?:[\"'][^\"']+[\"']|[^#\s]+)",
+        re.IGNORECASE,
+    )
+    matches = []
+    for path, text in read_text_files():
+        if path == Path(__file__):
+            continue
+        for line_number, line in enumerate(text.splitlines(), 1):
+            if secret_pattern.search(line):
+                matches.append(f"{path.relative_to(ROOT)}:{line_number}")
+    if matches:
+        report("FAIL", "inline-secret", ", ".join(matches[:8]))
+    else:
+        report("PASS", "inline-secret", "no private key or inline credential value")
+
+
+def check_decisions():
+    matches = []
+    for path, text in read_text_files():
+        if path == Path(__file__):
+            continue
+        if path.suffix.lower() in {".md", ".html"}:
+            continue
+        if "REQUIRED_DECISION" in text:
+            matches.append(str(path.relative_to(ROOT)))
+    if matches:
+        report("WARN", "required-decision", "open decisions in " + ", ".join(sorted(set(matches))))
+    else:
+        report("PASS", "required-decision", "none")
+
+
+def check_dependency_cycles(dependencies):
+    graph = {name: set(spec.get("requires", [])) for name, spec in dependencies["roles"].items()}
+    visiting, visited = set(), set()
+
+    def visit(node, path):
+        if node in visiting:
+            report("FAIL", "dependency-cycle", " -> ".join(path + [node]))
+            return
+        if node in visited:
+            return
+        visiting.add(node)
+        for requirement in graph.get(node, ()):
+            if requirement not in graph:
+                report("FAIL", "dependency-reference", f"{node} requires missing {requirement}")
+            else:
+                visit(requirement, path + [node])
+        visiting.remove(node)
+        visited.add(node)
+
+    for node in graph:
+        visit(node, [])
+    report("PASS", "dependency-cycle", f"checked {len(graph)} roles")
+
+
+def check_dns(dns):
+    records = {record["name"]: record for record in dns["zones"][0]["records"]}
+    if records.get("dc02", {}).get("address") != "192.168.214.13":
+        report("FAIL", "dns", "dc02 must use underlay 192.168.214.13")
+    application_names = {"cloud", "git", "login", "panel", "pdf", "scribble", "scribble-2", "wazuh", "wings", "adguard"}
+    for name in application_names:
+        record = records.get(name, {})
+        if record.get("address") != "10.10.10.14" or record.get("address_plane") != "wireguard_overlay":
+            report("FAIL", "dns", f"{name} must use overlay 10.10.10.14")
+    report("PASS", "dns", "underlay infrastructure and overlay application records declared")
+
+
+def check_ports(services):
+    service_map = {item.get("graph_id"): item for item in services["services"]}
+    expected = {
+        "svc_wireguard_hub": "51820/udp",
+        "id_dns_dc02": "53/tcp",
+        "svc_nginx": "443/tcp",
+    }
+    for service_id, port in expected.items():
+        if port not in service_map.get(service_id, {}).get("ports", []):
+            report("FAIL", "expected-port", f"{service_id} missing {port}")
+    report("PASS", "expected-port", "critical ports declared")
+
+
+def check_vm_resources(vms):
+    entries = vms["vms"]
+    totals = {key: sum(int(vm[key]) for vm in entries) for key in ("vcpu", "memory_gib", "disk_gib")}
+    expected = {"vcpu": 8, "memory_gib": 11, "disk_gib": 320}
+    if len(entries) != 3 or totals != expected:
+        report("FAIL", "vm-resources", f"got {len(entries)} VMs and totals {totals}, expected {expected}")
+    else:
+        report("PASS", "vm-resources", f"3 VMs; totals {totals}")
+
+
+def contains_azure(value):
+    return isinstance(value, str) and "azure" in value.lower()
+
+
+def check_scope_separation(inventories):
+    for path, data in inventories:
+        target = data.get("target_local") if isinstance(data, dict) else None
+        if target is None:
+            continue
+        if any(contains_azure(value) for _, value in walk(target)):
+            report("FAIL", "scope-separation", f"Azure reference inside target_local: {path.relative_to(ROOT)}")
+    report("PASS", "scope-separation", "target_local sections contain no Azure dependency")
+
+
+def check_compose():
+    compose = load_yaml(IAC / "docker" / "compose.yml")
+    expected = {"adguard", "nextcloud", "nextcloud-redis", "forgejo", "stirling", "scribble-1", "scribble-2"}
+    actual = set(compose.get("services", {}))
+    if not expected.issubset(actual):
+        report("FAIL", "compose", f"missing services {sorted(expected - actual)}")
+    else:
+        report("PASS", "compose", f"declared services: {', '.join(sorted(actual))}")
+
+
+def main() -> int:
+    check_yaml_json()
+    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+    inventory_paths = sorted((IAC / "inventory").glob("*.yml"))
+    inventories = [(path, load_yaml(path)) for path in inventory_paths]
+    by_name = {path.name: data for path, data in inventories}
+    check_graph_references(inventories, graph)
+    check_ip_and_cidr(by_name["hosts.yml"], by_name["networks.yml"])
+    check_secrets()
+    check_decisions()
+    dependencies = load_yaml(IAC / "ansible" / "dependency-map.yml")
+    check_dependency_cycles(dependencies)
+    check_dns(by_name["dns.yml"])
+    check_ports(by_name["services.yml"])
+    check_vm_resources(load_yaml(IAC / "vmware" / "vm-definitions.yml"))
+    check_scope_separation(inventories)
+    check_compose()
+    print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
+    return 1 if FAIL else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

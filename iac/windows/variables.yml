@@ -1,0 +1,17 @@
+schema_version: 1
+scope: bootstrap_only
+hostname: DC02
+underlay:
+  address: 192.168.214.13
+  prefix_length: 24
+  gateway: 192.168.214.2
+  bootstrap_dns: 192.168.214.2
+  final_dns: 127.0.0.1
+domain:
+  fqdn: LAB.TEST
+  netbios: LAB
+  admin_password: REQUIRED_SECRET
+  dsrm_password: REQUIRED_SECRET
+secret_refs:
+  bootstrap_admin_password: REQUIRED_SECRET
+  ssh_authorized_keys: REQUIRED_SECRET

@@ -12,6 +12,8 @@ VPS12 hostname soc-desktop, underlay 192.168.214.12, WG 10.10.10.12
 VPS13 hostname DC02, underlay 192.168.214.13, WG 10.10.10.13
 VPS14 hostname soc-server, underlay 192.168.214.14, WG 10.10.10.14
 DOMAIN LAB.TEST, DNS 192.168.214.13, AdGuard 192.168.214.14
+Infrastructure DNS: underlay `192.168.214.0/24`; application records: overlay
+`10.10.10.14`.
 ```
 
 Secret fuori repository:
@@ -100,6 +102,8 @@ gli IP fuori DHCP. Mantenere resolver `.2` finché DC02 non è pronto.
 NAT.
 
 **Test:** ping tra tre VM, `ip route`/`Get-NetIPConfiguration`, DNS esterno.
+Verificare che VPS12/VPS14 usino DC02 `192.168.214.13`; non usare ancora
+record applicativi overlay per il bootstrap.
 
 **Successo:** underlay bidirezionale e indirizzi stabili.
 
@@ -153,8 +157,9 @@ upstream Internet temporaneo.
 **Prerequisiti:** AdGuard health check passato.
 
 **Azioni:** cambiare forwarder DC02 a `192.168.214.14`; impostare VPS12/VPS14
-resolver primario `192.168.214.13`; creare record `cloud`, `git`, `pdf`,
-`login`, `panel`, `wazuh`, `adguard`, `wings`, `scribble` verso `.14`.
+resolver primario `192.168.214.13`; creare `dc02.lab.test` verso
+`192.168.214.13` e i record applicativi `cloud`, `git`, `pdf`, `login`, `panel`,
+`wazuh`, `adguard`, `wings`, `scribble*` verso `10.10.10.14`.
 
 **Configurazione attesa:** client e servizi usano DC02; DC02 inoltra ad
 AdGuard; AdGuard inoltra Internet.
@@ -171,17 +176,34 @@ AdGuard; AdGuard inoltra Internet.
 
 **Prerequisiti:** underlay stabile; UDP owner deciso.
 
-**Azioni:** generare nuove chiavi; configurare VPS14 `10.10.10.14/24`, peer
-VPS12/VPS13 `.12/.13`, client `.101-.107`; abilitare forwarding tra peer.
+**Azioni:** generare nuove chiavi; configurare VPS14 `10.10.10.14/24` e solo i
+peer VM VPS12/VPS13 `.12/.13`; abilitare forwarding tra peer. Il client host
+`.101` resta sul profilo Azure e non viene collegato al nuovo hub.
 Verificare unit reale installata; non assumere `wireguard@wg-final`.
 
 **Configurazione attesa:** hub VPS14, AllowedIPs minimi, UDP 51820.
 
-**Test:** handshake, ping `.12/.13/.14`, accesso DNS e HTTPS via tunnel.
+**Test:** handshake tra le tre VM, ping `.12/.13/.14`, accesso DNS underlay e
+HTTPS via tunnel. Il test client `.101` è esclusivamente WG-03 di cutover.
 
 **Successo:** peer autorizzati comunicano; peer non autorizzati no.
 
 **Rollback:** disabilitare/rimuovere solo config WireGuard locale nuova.
+
+## Automazione futura per fase
+
+| Fase | Componente IaC futuro |
+|---|---|
+| 0 | `iac/vmware/` e `iac/validation/preflight` |
+| 1 | `iac/vmware/vm-definitions.yml` + renderer VMX |
+| 2 | `iac/linux/autoinstall/`, `iac/windows/autounattend.xml` |
+| 3 | `iac/linux/cloud-init/`, `iac/windows/bootstrap.ps1` |
+| 4-6 | Ansible `ad_ds`, `dns`, `adguard` |
+| 7 | Ansible `wireguard` + acceptance WG-01/WG-02 |
+| 8-9 | Ansible database/CA + `iac/docker/compose.yml` |
+| 10-11 | ruoli Ansible `pterodactyl`, `nginx`, `portal`, `scribble` |
+| 12-13 | ruoli `wazuh_server`, `wazuh_agent*`, `xrdp`, `sssd` |
+| 14-15 | `iac/validation/` + acceptance E2E; WG-03 solo cutover |
 
 ## Fase 8 — CA e database vuoti
 

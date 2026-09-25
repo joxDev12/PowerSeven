@@ -1,0 +1,33 @@
+schema_version: 1
+scope: provisioning_roles_only
+cycle_policy: provisioning_graph_must_be_acyclic
+roles:
+  common_linux: {requires: []}
+  ad_ds: {requires: []}
+  dns: {requires: [ad_ds]}
+  windows_firewall: {requires: [ad_ds, dns]}
+  openssh_windows: {requires: [windows_firewall]}
+  common_windows: {requires: [openssh_windows]}
+  wireguard: {requires: [common_linux]}
+  docker: {requires: [common_linux]}
+  postgresql: {requires: [common_linux]}
+  mariadb: {requires: [common_linux]}
+  redis: {requires: [common_linux]}
+  adguard: {requires: [docker]}
+  sssd: {requires: [ad_ds, dns, wireguard]}
+  nginx: {requires: [docker, wireguard]}
+  nextcloud: {requires: [docker, postgresql, sssd]}
+  forgejo: {requires: [docker, postgresql, sssd]}
+  stirling: {requires: [docker]}
+  pterodactyl: {requires: [docker, mariadb]}
+  portal: {requires: [docker, postgresql, nginx]}
+  scribble: {requires: [docker, nginx]}
+  wazuh_server: {requires: [docker, wireguard]}
+  xrdp: {requires: [common_linux, sssd]}
+  wazuh_agent: {requires: [common_linux, wireguard, wazuh_server]}
+  wazuh_agent_windows: {requires: [common_windows, wireguard, wazuh_server]}
+provisioning_notes:
+  pterodactyl_panel_before_wings: true
+  wings_runtime_connects_to_panel: true
+  dns_bootstrap_forwarder: 192.168.214.2
+  dns_final_forwarder: 192.168.214.14

@@ -1,0 +1,11 @@
+---
+- name: PowerSeven Windows identity target
+  hosts: windows
+  gather_facts: false
+  roles:
+    - ad_ds
+    - dns
+    - windows_firewall
+    - openssh_windows
+    - common_windows
+    - wazuh_agent_windows

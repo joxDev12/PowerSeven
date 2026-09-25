@@ -1,0 +1,7 @@
+windows_hostname: DC02
+windows_underlay_ip: 192.168.214.13
+windows_gateway: 192.168.214.2
+windows_bootstrap_dns: 192.168.214.2
+windows_final_dns: 127.0.0.1
+ad_forest_root: LAB.TEST
+ad_cs_target: excluded_unverified

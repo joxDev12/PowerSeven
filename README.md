@@ -48,7 +48,7 @@ L'accesso amministrativo avviene attraverso WireGuard. La porta pubblica dedicat
 | RDP desktop SOC | Client VPN → `10.10.10.12:3389` |
 | RDP Domain Controller | Client VPN → `10.10.10.13:3389` |
 | DNS interno | Client/VM → DC02 `10.10.10.13` |
-| DNS upstream | DC02 → AdGuard `10.10.10.14` → Internet |
+| DNS upstream | DC02 `192.168.214.13` → AdGuard `192.168.214.14` → Internet (underlay) |
 
 ### Topologia WireGuard
 

@@ -1,0 +1,115 @@
+schema_version: 1
+scope: target_local_vmware
+policy:
+  unknown_versions: REQUIRED_DECISION
+  no_floating_production_tags: true
+  source_current_versions_are_reference_only: true
+versions:
+  - name: Ubuntu Desktop
+    target_version: "24.04.4"
+    version_policy: pin_minor
+    installation_source: official Ubuntu ISO
+    pin_required: true
+    notes: observed PowerSeven source version; revalidate ISO checksum before build
+  - name: Ubuntu Server
+    target_version: "24.04.4"
+    version_policy: pin_minor
+    installation_source: official Ubuntu ISO
+    pin_required: true
+    notes: observed PowerSeven source version; revalidate ISO checksum before build
+  - name: Windows Server
+    target_version: "2022"
+    version_policy: pin_major
+    installation_source: licensed Windows Server ISO
+    pin_required: true
+    notes: Datacenter edition is the observed source role
+  - name: WireGuard
+    target_version: REQUIRED_DECISION
+    version_policy: distribution_supported_stable
+    installation_source: Ubuntu package / Windows package
+    pin_required: true
+    notes: select one package baseline; do not assume a systemd unit name
+  - name: Nginx
+    target_version: REQUIRED_DECISION
+    version_policy: distribution_supported_stable
+    installation_source: Ubuntu package
+    pin_required: true
+    notes: version not established by current model
+  - name: Docker Engine
+    target_version: REQUIRED_DECISION
+    version_policy: vendor_supported_stable
+    installation_source: Docker official repository
+    pin_required: true
+    notes: Compose plugin version must be selected with Engine
+  - name: PostgreSQL
+    target_version: "18.6"
+    version_policy: pin_minor
+    installation_source: PostgreSQL official repository or approved package
+    pin_required: true
+    notes: observed source version; fresh empty databases only
+  - name: MariaDB
+    target_version: "10.11.14"
+    version_policy: pin_minor
+    installation_source: MariaDB official repository or approved package
+    pin_required: true
+    notes: observed source version; fresh empty panel database only
+  - name: Redis
+    target_version: REQUIRED_DECISION
+    version_policy: supported_stable
+    installation_source: Ubuntu package or approved container image
+    pin_required: true
+    notes: system Redis and Nextcloud Redis deployment choice remains open
+  - name: Wazuh
+    target_version: "4.14.8"
+    version_policy: pin_minor
+    installation_source: Wazuh official repository/images
+    pin_required: true
+    notes: observed source version; initialize empty monitoring state
+  - name: Nextcloud
+    target_version: REQUIRED_DECISION
+    version_policy: supported_major_pin
+    installation_source: official container image
+    pin_required: true
+    notes: choose application major compatible with selected PHP and PostgreSQL
+  - name: Forgejo
+    target_version: REQUIRED_DECISION
+    version_policy: supported_release_pin
+    installation_source: official container image
+    pin_required: true
+    notes: fresh instance; no repository data migration
+  - name: Stirling PDF
+    target_version: REQUIRED_DECISION
+    version_policy: supported_release_pin
+    installation_source: official container image
+    pin_required: true
+    notes: image tag not established by current model
+  - name: AdGuard Home
+    target_version: REQUIRED_DECISION
+    version_policy: supported_release_pin
+    installation_source: official container image
+    pin_required: true
+    notes: final DC02 forwarder is underlay 192.168.214.14
+  - name: Pterodactyl Panel
+    target_version: REQUIRED_DECISION
+    version_policy: supported_release_pin
+    installation_source: official release/package
+    pin_required: true
+    notes: fresh panel and MariaDB schema
+  - name: Wings
+    target_version: REQUIRED_DECISION
+    version_policy: match_panel_release
+    installation_source: official release/package
+    pin_required: true
+    notes: configure after Panel; runtime dependency has no provisioning cycle
+  - name: XRDP
+    target_version: REQUIRED_DECISION
+    version_policy: Ubuntu_supported_package
+    installation_source: Ubuntu package
+    pin_required: true
+    notes: install after XFCE and domain access policy
+  - name: SSSD
+    target_version: REQUIRED_DECISION
+    version_policy: Ubuntu_supported_package
+    installation_source: Ubuntu package
+    pin_required: true
+    notes: configure after AD DS, DNS and Kerberos are functional

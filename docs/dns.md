@@ -2,7 +2,7 @@
 
 Verifica diretta read-only su DC02 del 25 settembre 2026: le zone sono `_msdcs.lab.test`, `lab.test`, reverse locali e `TrustAnchors`. La ricerca di record A con indirizzo `10.20.20.*` non ha restituito risultati; non è stata rilevata una configurazione DNS legacy attiva.
 
-La zona AD-integrata `lab.test` contiene `adguard`, `cloud`, `git`, `login`, `panel`, `pdf`, `scribble`, `scribble-2`, `wazuh` e `wings` verso `10.10.10.14`. `dc02` è registrato con `10.10.10.13` e `172.16.0.4`; sono presenti anche i record di zona directory a `10.10.10.13`. VPS12 usa DC02 (`10.10.10.13`) come DNS; DC02 usa `10.10.10.14` come forwarder; AdGuard risponde su `10.10.10.14:53` TCP/UDP e inoltra a Internet.
+La zona AD-integrata `lab.test` contiene `adguard`, `cloud`, `git`, `login`, `panel`, `pdf`, `scribble`, `scribble-2`, `wazuh` e `wings` verso `10.10.10.14` sull'overlay. `dc02` usa `192.168.214.13` sull'underlay; VPS12 e VPS14 usano DC02 come DNS; DC02 inoltra a AdGuard `192.168.214.14` sull'underlay. I record applicativi restano raggiungibili via WireGuard.
 
 | Ruolo | Host/protocollo | Health check read-only | Failure mode |
 |---|---|---|---|

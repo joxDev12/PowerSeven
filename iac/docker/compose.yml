@@ -1,0 +1,91 @@
+name: powerseven
+
+services:
+  adguard:
+    image: "${ADGUARD_IMAGE}"
+    container_name: powerseven-adguard
+    restart: unless-stopped
+    ports:
+      - "192.168.214.14:53:53/tcp"
+      - "192.168.214.14:53:53/udp"
+      - "127.0.0.1:3002:3000/tcp"
+    volumes:
+      - adguard_work:/opt/adguardhome/work
+      - adguard_config:/opt/adguardhome/conf
+    networks: [adguard]
+
+  nextcloud:
+    image: "${NEXTCLOUD_IMAGE}"
+    container_name: powerseven-nextcloud
+    restart: unless-stopped
+    ports: ["127.0.0.1:8083:80"]
+    environment:
+      POSTGRES_HOST: "${POSTGRES_HOST}"
+      POSTGRES_PORT: "${POSTGRES_PORT}"
+      POSTGRES_PASSWORD: "${NEXTCLOUD_DB_PASSWORD}"
+      LDAP_BIND_PASSWORD: "${LDAP_BIND_PASSWORD}"
+    volumes: [nextcloud_config:/var/www/html/config, nextcloud_data:/var/www/html/data]
+    depends_on: [nextcloud-redis]
+    networks: [cloud]
+
+  nextcloud-redis:
+    image: "${REDIS_IMAGE}"
+    container_name: powerseven-nextcloud-redis
+    restart: unless-stopped
+    volumes: [nextcloud_redis:/data]
+    networks: [cloud]
+
+  forgejo:
+    image: "${FORGEJO_IMAGE}"
+    container_name: powerseven-forgejo
+    restart: unless-stopped
+    ports: ["127.0.0.1:3001:3000"]
+    environment:
+      FORGEJO__database__HOST: "${POSTGRES_HOST}:${POSTGRES_PORT}"
+      FORGEJO__database__PASSWD: "${FORGEJO_DB_PASSWORD}"
+      FORGEJO__ldap__BIND_PASSWORD: "${LDAP_BIND_PASSWORD}"
+    volumes: [forgejo_data:/data]
+    networks: [forgejo]
+
+  stirling:
+    image: "${STIRLING_IMAGE}"
+    container_name: powerseven-stirling
+    restart: unless-stopped
+    ports: ["127.0.0.1:8084:8080"]
+    volumes: [stirling_data:/configs]
+    networks: [stirling]
+
+  scribble-1:
+    image: "${SCRIBBLE_IMAGE}"
+    container_name: powerseven-scribble-1
+    restart: unless-stopped
+    ports: ["127.0.0.1:8081:8080"]
+    networks: [scribble]
+
+  scribble-2:
+    image: "${SCRIBBLE_IMAGE}"
+    container_name: powerseven-scribble-2
+    restart: unless-stopped
+    ports: ["127.0.0.1:8082:8080"]
+    networks: [scribble]
+
+volumes:
+  adguard_work: {}
+  adguard_config: {}
+  nextcloud_config: {}
+  nextcloud_data: {}
+  nextcloud_redis: {}
+  forgejo_data: {}
+  stirling_data: {}
+
+networks:
+  adguard:
+    name: soc-adguard_default
+  cloud:
+    name: soc-cloud_cloudnet
+  forgejo:
+    name: soc-forgejo_forgejonet
+  stirling:
+    name: soc-stirling_default
+  scribble:
+    name: soc-scribble_default

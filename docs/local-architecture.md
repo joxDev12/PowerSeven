@@ -21,7 +21,7 @@ Prima dell'implementazione l'operatore deve verificare capacità, storage e CIDR
 
 ### Underlay VMware
 
-Usare VMnet8 NAT già presente:
+Target approvato: usare VMnet8 NAT:
 
 | Elemento | Valore |
 |---|---|
@@ -42,7 +42,7 @@ assunta o modificata da questo modello.
 
 ### Overlay WireGuard
 
-Resta invariato:
+Target approvato; il tunnel resta separato dall'underlay:
 
 | Peer | IP |
 |---|---|
@@ -51,9 +51,26 @@ Resta invariato:
 | VPS14 hub | `10.10.10.14/24` |
 | giorgio, peppe, marco, monia, rocca, chiara, simone | `10.10.10.101-.107/32` |
 
-Underlay trasporta WireGuard; servizi amministrativi usano overlay. DNS AD può
-essere raggiunto su `10.10.10.13` dopo bootstrap, oppure sull'underlay durante
-la fase iniziale.
+Underlay trasporta WireGuard; l'overlay è il percorso VPN per amministrazione e
+servizi applicativi. DNS/AD infrastrutturale resta sull'underlay
+`192.168.214.13`/`192.168.214.14` anche dopo il bootstrap.
+
+### Piano DNS definitivo
+
+Il trasporto infrastrutturale DNS/AD usa sempre l'underlay VMware:
+
+```text
+VPS12/VPS14 -> DC02 DNS 192.168.214.13
+DC02 -> AdGuard 192.168.214.14
+```
+
+I record applicativi `lab.test` puntano invece all'indirizzo del servizio sul
+WireGuard overlay: `10.10.10.14`. Questo vale per `cloud`, `git`, `pdf`,
+`login`, `panel`, `wazuh`, `wings`, `adguard`, `scribble` e `scribble-2`.
+Il record infrastrutturale `dc02.lab.test` punta a `192.168.214.13`.
+
+Questa distinzione evita di usare l'overlay per il bootstrap AD/DNS e mantiene
+gli endpoint applicativi raggiungibili attraverso il percorso VPN previsto.
 
 ### Accesso esterno UDP 51820
 
@@ -99,6 +116,6 @@ eventualmente pubblicato; backend applicativi su loopback/container network.
 
 ## Decisione
 
-VMnet8 NAT comune è sufficiente come proposta di laboratorio. Non serve
-replicare le tre VNet Azure. `192.168.214.0/24` resta candidato target e va
-approvato/verificato prima di creare VM; sostituirlo se risulta in conflitto.
+VMnet8 NAT comune è il target approvato. Non serve replicare le tre VNet Azure.
+La rete è fissata a `192.168.214.0/24`; la configurazione reale resta fuori
+scope di questa fase.

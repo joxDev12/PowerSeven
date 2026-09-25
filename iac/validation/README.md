@@ -1,5 +1,14 @@
 # Validation
 
-Qui andranno validator del grafo/inventory, check CIDR e riferimenti, test
-DNS/Kerberos/WireGuard, health check servizi e suite definita in
-`docs/local-acceptance-tests.md`.
+`preflight` è un controllo read-only locale, senza provisioning e senza
+connessioni alle VM. Usa Python standard library e PyYAML se disponibile.
+
+Controlla YAML/JSON, riferimenti al grafo, IP/CIDR, secret inline, decisioni
+aperte, cicli, DNS, porte, risorse VM e separazione Azure/local.
+
+Pipeline futura:
+
+```text
+preflight -> VM definitions -> OS bootstrap -> Ansible syntax/check
+          -> Compose config -> acceptance plan
+```

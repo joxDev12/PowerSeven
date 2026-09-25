@@ -9,6 +9,17 @@ bootstrap:
   adguard_address: 192.168.214.14
   dc02_forwarder_final: 192.168.214.14
   switch_condition: app_adguard_health_check_passed
+address_planes:
+  infrastructure_dns:
+    transport: underlay
+    cidr: 192.168.214.0/24
+    vps12_resolver: 192.168.214.13
+    vps14_resolver: 192.168.214.13
+    dc02_forwarder: 192.168.214.14
+  application_dns_records:
+    transport: wireguard_overlay
+    cidr: 10.10.10.0/24
+    service_address: 10.10.10.14
 zones:
   - name: lab.test
     kind: active_directory_integrated
@@ -16,37 +27,48 @@ zones:
     records:
       - name: dc02
         type: A
-        address: 10.10.10.13
+        address: 192.168.214.13
+        address_plane: underlay
       - name: cloud
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: git
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: login
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: panel
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: pdf
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: scribble
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: scribble-2
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: wazuh
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: wings
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
       - name: adguard
         type: A
         address: 10.10.10.14
+        address_plane: wireguard_overlay
     state: observed
     target_state: create_fresh_zone
   - name: _msdcs.lab.test

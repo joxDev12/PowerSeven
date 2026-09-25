@@ -10,7 +10,7 @@ vuoti. Ogni test registra host, timestamp, comando, risultato e log sintetico.
 - IP underlay `.12/.13/.14` assegnati;
 - overlay WireGuard configurato;
 - secret refs risolti fuori repository;
-- client WireGuard di test separato dal route host `giorgio`.
+- client WireGuard di test separato dal client host già esistente.
 
 ## Suite
 
@@ -20,9 +20,10 @@ vuoti. Ogni test registra host, timestamp, comando, risultato e log sintetico.
 | NET-02 | Internet NAT | query DNS/HTTPS via `192.168.214.2` | uscita controllata |
 | WG-01 | Hub | VPS14 ascolta UDP 51820 | listener corretto |
 | WG-02 | Peer VM | handshake VPS12/VPS13 con VPS14 | `.12/.13/.14` raggiungibili |
-| WG-03 | Client | client `10.10.10.101` raggiunge VPS14, DC02, VPS12 | peer autorizzato funziona |
+| WG-03 | CUTOVER TEST | client `10.10.10.101` viene spostato al nuovo hub solo a fine rebuild | peer autorizzato funziona; non eseguire durante il bootstrap |
+| DNS-00 | Piani indirizzo | VPS12/VPS14 usano DC02 `192.168.214.13`; DC02 usa AdGuard `192.168.214.14` | DNS infrastrutturale su underlay |
 | DNS-01 | Zone | DC02 risolve `lab.test`, `_msdcs.lab.test` | zone presenti |
-| DNS-02 | Record | `dc02`, `cloud`, `git`, `pdf`, `login`, `panel`, `wazuh`, `wings`, `scribble` | record corretti |
+| DNS-02 | Record | `dc02` → `192.168.214.13`; app `cloud`, `git`, `pdf`, `login`, `panel`, `wazuh`, `wings`, `adguard`, `scribble*` → `10.10.10.14` | piani indirizzo corretti |
 | DNS-03 | Forwarder | DC02 inoltra query esterne ad AdGuard | query Internet funziona |
 | ID-01 | AD | dominio `LAB.TEST`, utenti e gruppi | directory nuova disponibile |
 | ID-02 | Kerberos | ticket con account test | `kinit`/`klist` validi |
@@ -47,6 +48,14 @@ vuoti. Ogni test registra host, timestamp, comando, risultato e log sintetico.
 | WAZUH-02 | Agents | VPS12 e DC02 | due agenti online |
 | FW-01 | Firewall | porte da underlay/overlay/Internet | solo superfici previste |
 | E2E-01 | End-to-end | client WG → DNS → Nginx → app → identity/DB | flusso completo PASS |
+
+## Cutover WireGuard
+
+WG-03 è l'ultimo test: prima verificare solo handshake e traffico tra VPS12,
+VPS13 e VPS14. Il client host `.101` non deve essere collegato al nuovo hub in
+parallelo al tunnel Azure. Il cutover richiede sostituire il profilo del client
+host in una finestra controllata; questa procedura non viene eseguita da
+questa repository.
 
 ## Comandi indicativi
 

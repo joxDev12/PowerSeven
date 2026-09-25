@@ -1,0 +1,15 @@
+powerseven_domain: LAB.TEST
+powerseven_dns_zone: lab.test
+underlay_cidr: 192.168.214.0/24
+underlay_gateway: 192.168.214.2
+overlay_cidr: 10.10.10.0/24
+dc02_underlay_ip: 192.168.214.13
+adguard_underlay_ip: 192.168.214.14
+application_service_ip: 10.10.10.14
+temporary_dns: 192.168.214.2
+final_linux_dns: 192.168.214.13
+secret_refs:
+  domain_admin_password: REQUIRED_SECRET
+  wireguard_private_keys: REQUIRED_SECRET
+  database_passwords: REQUIRED_SECRET
+  tls_private_keys: REQUIRED_SECRET

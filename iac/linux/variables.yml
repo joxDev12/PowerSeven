@@ -1,0 +1,13 @@
+schema_version: 1
+scope: bootstrap_only
+bootstrap_user: powerseven-bootstrap
+ssh_authorized_keys_ref: REQUIRED_SECRET
+temporary_dns: 192.168.214.2
+underlay:
+  cidr: 192.168.214.0/24
+  gateway: 192.168.214.2
+  vps12: 192.168.214.12
+  vps14: 192.168.214.14
+secret_refs:
+  ssh_authorized_keys: REQUIRED_SECRET
+  bootstrap_password: REQUIRED_SECRET

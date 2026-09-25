@@ -36,15 +36,16 @@ workflow fragile. Potrà essere rivalutato se l'host passerà a vSphere/ESXi.
 - `inventory/storage.yml`: dati persistenti, origine, destinazione e migrazione.
 - `inventory/dependencies.yml`: grafo ridotto delle dipendenze e ordine di
   provisioning.
+- `versions.yml`: matrice versioni target e decisioni ancora aperte.
 
 ## Struttura target
 
-- `vmware/`: definizioni VMX, rete VMnet, `vmrun`, CPU/RAM/disco/NIC.
-- `linux/`: cloud-init/autoinstall, ruoli Ubuntu, WireGuard, Nginx, DB e host.
-- `windows/`: unattend, PowerShell, AD DS, DNS, gruppi e firewall.
-- `ansible/`: ruoli/playbook idempotenti che compongono Linux e Windows.
+- `vmware/`: definizioni VM, rete VMnet, storage root parametrico e lifecycle futuro.
+- `linux/`: autoinstall/cloud-init e contratto bootstrap Ubuntu.
+- `windows/`: unattend, PowerShell e contratto bootstrap Windows.
+- `ansible/`: inventory, variabili, dependency map, playbook e role contracts.
 - `docker/`: Compose, reti, container, config e volumi vuoti.
-- `validation/`: check schema, grafo, DNS, rete, servizi e acceptance tests.
+- `validation/`: preflight read-only e pipeline di dry-run.
 
 Separazione obbligatoria:
 
@@ -56,8 +57,8 @@ APPLICATION DEPLOYMENT  docker/ + ansible/
 VALIDATION              validation/
 ```
 
-Queste cartelle contengono ora solo contratti e README. Playbook, VMX e script
-arrivano in una fase successiva, dopo approvazione dell'architettura.
+Questa passata crea contratti e template. Nessun renderer, playbook o script di
+provisioning viene eseguito automaticamente.
 
 ## Regole
 

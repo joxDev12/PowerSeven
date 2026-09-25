@@ -1,0 +1,23 @@
+---
+- name: PowerSeven Linux target
+  hosts: linux
+  gather_facts: false
+  roles:
+    - common_linux
+    - wireguard
+    - docker
+    - postgresql
+    - mariadb
+    - redis
+    - adguard
+    - sssd
+    - nginx
+    - nextcloud
+    - forgejo
+    - stirling
+    - pterodactyl
+    - portal
+    - scribble
+    - wazuh_server
+    - xrdp
+    - wazuh_agent

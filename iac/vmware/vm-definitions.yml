@@ -1,0 +1,56 @@
+schema_version: 1
+mode: definition_only
+hypervisor: VMware Workstation Pro
+storage_root: <VM_STORAGE_ROOT>
+network:
+  name: VMnet8
+  cidr: 192.168.214.0/24
+  gateway: 192.168.214.2
+  state: approved_target_not_configured
+isos:
+  ubuntu_desktop: <UBUNTU_DESKTOP_ISO>
+  ubuntu_server: <UBUNTU_SERVER_ISO>
+  windows_server: <WINDOWS_SERVER_2022_ISO>
+vms:
+  - id: vps12
+    vm_name: PowerSeven-VPS12
+    hostname: soc-desktop
+    guest_os: Ubuntu Desktop 24.04.4
+    vcpu: 2
+    memory_gib: 2
+    disk_gib: 80
+    nic:
+      network: VMnet8
+      underlay_ip: 192.168.214.12
+      gateway: 192.168.214.2
+    iso_ref: ubuntu_desktop
+    vmx_path: <VM_STORAGE_ROOT>/PowerSeven/VPS12/VPS12.vmx
+    state: definition_only
+  - id: vps13
+    vm_name: PowerSeven-VPS13
+    hostname: DC02
+    guest_os: Windows Server 2022 Datacenter
+    vcpu: 2
+    memory_gib: 3
+    disk_gib: 80
+    nic:
+      network: VMnet8
+      underlay_ip: 192.168.214.13
+      gateway: 192.168.214.2
+    iso_ref: windows_server
+    vmx_path: <VM_STORAGE_ROOT>/PowerSeven/VPS13/VPS13.vmx
+    state: definition_only
+  - id: vps14
+    vm_name: PowerSeven-VPS14
+    hostname: soc-server
+    guest_os: Ubuntu Server 24.04.4
+    vcpu: 4
+    memory_gib: 6
+    disk_gib: 160
+    nic:
+      network: VMnet8
+      underlay_ip: 192.168.214.14
+      gateway: 192.168.214.2
+    iso_ref: ubuntu_server
+    vmx_path: <VM_STORAGE_ROOT>/PowerSeven/VPS14/VPS14.vmx
+    state: definition_only

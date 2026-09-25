@@ -1,0 +1,9 @@
+---
+- name: Read-only PowerSeven check-mode contract
+  hosts: powerseven
+  gather_facts: false
+  check_mode: true
+  tasks:
+    - name: Placeholder for future idempotence checks
+      ansible.builtin.debug:
+        msg: check-mode contract only; no changes are defined yet

@@ -34,6 +34,14 @@ current_azure:
   target_dependency: none
 
 target_local:
+  address_planes:
+    underlay:
+      cidr: 192.168.214.0/24
+      purpose: infrastructure_transport_and_bootstrap_dns
+      gateway: 192.168.214.2
+    overlay:
+      cidr: 10.10.10.0/24
+      purpose: vpn_access_and_application_service_addresses
   underlay:
     graph_id: net_local_vmware_underlay
     name: VMware VMnet8 NAT
@@ -48,8 +56,8 @@ target_local:
       vps13: 192.168.214.13
       vps14: 192.168.214.14
     internet: NAT
-    source: local_discovery_2026-09-25
-    state: proposed; not configured by this task
+    source: approved_local_architecture
+    state: approved_target; not configured by this task
   overlay:
     graph_id: net_wireguard
     kind: encrypted_overlay
@@ -67,7 +75,21 @@ target_local:
       chiara: 10.10.10.106/32
       simone: 10.10.10.107/32
     endpoint: udp/51820
-    state: target_design; not configured by this task
+    state: approved_target; not configured by this task
+  dns_paths:
+    infrastructure:
+      vps12_to_dc02: 192.168.214.13
+      vps14_to_dc02: 192.168.214.13
+      dc02_to_adguard: 192.168.214.14
+    application_records:
+      address_plane: wireguard_overlay
+      address: 10.10.10.14
+      names: [cloud, git, pdf, login, panel, wazuh, wings, adguard, scribble, scribble-2]
+  wireguard_migration:
+    initial_test_scope: [vps12, vps13, vps14]
+    host_client_101: do_not_use_during_local_rebuild
+    cutover_acceptance_id: WG-03
+    cutover_state: final_phase_only; not executed by this task
   external_access:
     required: true
     options:

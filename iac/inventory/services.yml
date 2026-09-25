@@ -3,6 +3,19 @@ source_graph: ../../graph/powerseven.graph.json
 scope:
   source_current: azure_observation
   target_local: vmware_rebuild
+address_planes:
+  infrastructure_dns:
+    vps12_to_dc02: 192.168.214.13
+    vps14_to_dc02: 192.168.214.13
+    dc02_to_adguard: 192.168.214.14
+  application_records:
+    address: 10.10.10.14
+    transport: wireguard_overlay
+wireguard_migration:
+  initial_peer_scope: [vps12, vps13, vps14]
+  host_client_101: do_not_use_until_cutover
+  acceptance_id: WG-03
+  execution: not_in_this_task
 dns_bootstrap:
   initial_resolver: 192.168.214.2
   final_resolver: 192.168.214.13
