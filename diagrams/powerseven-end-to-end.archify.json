@@ -4,7 +4,7 @@
   "meta": {"title":"PowerSeven — mappa end-to-end","quality_profile":"standard","viewBox":[1395,880]},
   "components":[
     {"id":"clients","type":"external","label":"Client WG · 10.10.10.101–107","pos":[0,100],"size":[220,62]},
-    {"id":"hub","type":"security","label":"VPS14 · WireGuard HUB","sublabel":"wg-final · UDP 51820 · SSH 22","pos":[245,100],"size":[210,62]},
+    {"id":"hub","type":"security","label":"VPS14 · WireGuard HUB","sublabel":"wg-final · UDP 51820 · SSH 22 via VPN","pos":[245,100],"size":[210,62]},
     {"id":"desktop","type":"frontend","label":"VPS12 · soc-desktop","sublabel":"RDP · SSH · Wazuh agent","pos":[480,100],"size":[220,62]},
     {"id":"dc","type":"security","label":"VPS13 · DC02","sublabel":"AD DS · DNS · Kerberos · LDAP","pos":[725,100],"size":[240,62]},
     {"id":"adguard","type":"security","label":"AdGuard Home","sublabel":"DNS 53 TCP/UDP","pos":[990,100],"size":[190,62]},
@@ -22,7 +22,8 @@
     {"kind":"security-group","label":"WireGuard overlay · 10.10.10.0/24","wraps":["hub","desktop","dc"],"pad":12}
   ],
   "connections":[
-    {"from":"clients","to":"hub","label":"WireGuard UDP 51820 · SSH 22","variant":"security","labelAt":[120,190]},
+    {"from":"clients","to":"hub","label":"WireGuard UDP 51820","variant":"security","labelAt":[200,190]},
+    {"from":"clients","to":"hub","label":"SSH 10.10.10.14:22 via VPN","variant":"dashed","fromSide":"top","toSide":"left","via":[[110,80],[230,80],[230,131]],"labelAt":[160,40]},
     {"from":"hub","to":"desktop","label":"RDP 3389 / SSH 22","variant":"security","labelAt":[468,190]},
     {"from":"hub","to":"dc","label":"RDP 3389 / SSH 22","variant":"security","fromSide":"top","toSide":"top","via":[[350,60],[845,60]],"labelAt":[600,60]},
     {"from":"desktop","to":"dc","label":"DNS · Kerberos · LDAP","variant":"security","labelAt":[713,190]},
