@@ -37,7 +37,8 @@ applications:
   SCRIBBLE:
     unit: powerseven-app-scribble.service
     requires: [docker.service]
-    containers: [scribble-1, scribble-2]
+    containers: [8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5, 548ab28c-0e73-4706-a894-959a2d1b76a1]
+    health: [http://10.10.10.14:8081/, http://10.10.10.14:8082/]
   PTERODACTYL:
     unit: powerseven-app-pterodactyl.service
     requires: [docker.service, mariadb.service, redis-server.service, php8.3-fpm.service, wings.service]

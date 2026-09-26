@@ -109,6 +109,17 @@ def main() -> int:
         fail("Stirling container healthcheck is missing")
     if not any(check.get("url") == "http://127.0.0.1:8084/api/v1/info/status" for check in stirling_checks):
         fail("Stirling HTTP healthcheck is missing")
+    scribble_checks = healthchecks.get("profiles", {}).get("scribble", [])
+    if apps.get("SCRIBBLE", {}).get("requires") != ["docker.service"]:
+        fail("Scribble must require Docker only")
+    if {check.get("container") for check in scribble_checks if check.get("container")} != {
+        "8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5", "548ab28c-0e73-4706-a894-959a2d1b76a1"
+    }:
+        fail("Scribble container healthchecks are incomplete")
+    if {check.get("url") for check in scribble_checks if check.get("url")} != {
+        "http://10.10.10.14:8081/", "http://10.10.10.14:8082/"
+    }:
+        fail("Scribble HTTP healthchecks are incomplete")
 
     components = optimization.get("components", {})
     if "forgejo" not in components or "postgresql" not in components:
@@ -121,6 +132,7 @@ def main() -> int:
         "powerseven-core.target", "powerseven-dashboard-health.service",
         "powerseven-app-forgejo.service", "powerseven-app-nextcloud.service",
         "powerseven-app-stirling.service",
+        "powerseven-app-scribble.service",
     }
     names = {path.name for path in systemd.iterdir()}
     if not required <= names:
@@ -131,6 +143,8 @@ def main() -> int:
         fail("legacy Nextcloud profile unit must not remain")
     if "powerseven-profile-stirling.service" in names:
         fail("legacy Stirling profile unit must not remain")
+    if "powerseven-profile-scribble.service" in names:
+        fail("legacy Scribble profile unit must not remain")
     core_unit = (systemd / "powerseven-core.target").read_text(encoding="utf-8")
     dashboard_unit = (systemd / "powerseven-dashboard-health.service").read_text(encoding="utf-8")
     if "postgresql.service" in core_unit or "postgresql.service" in dashboard_unit:
@@ -150,6 +164,8 @@ def main() -> int:
         fail("controller lacks lock, desired-state union, or actual-state discovery")
     if "stirling_health" not in controller or "start_stirling" not in controller or "stop_stirling" not in controller:
         fail("controller lacks Stirling lifecycle and health handling")
+    if "scribble_health" not in controller or "start_scribble" not in controller or "stop_scribble" not in controller:
+        fail("controller lacks Scribble lifecycle and health handling")
     if "postgresql.service" in controller:
         fail("controller contains ambiguous PostgreSQL aggregator reference")
 

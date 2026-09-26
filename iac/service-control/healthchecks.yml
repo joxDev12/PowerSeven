@@ -93,6 +93,23 @@ profiles:
       command: systemctl is-active --quiet wazuh-indexer.service
 
   scribble:
-    - id: containers
+    - id: container-8081
       type: docker
-      command: docker ps --filter label=org.opencontainers.image.title=Scribble
+      container: 8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5
+      expected_state: running
+      command: docker inspect --format '{{.State.Status}}' 8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5
+    - id: container-8082
+      type: docker
+      container: 548ab28c-0e73-4706-a894-959a2d1b76a1
+      expected_state: running
+      command: docker inspect --format '{{.State.Status}}' 548ab28c-0e73-4706-a894-959a2d1b76a1
+    - id: http-8081
+      type: http
+      url: http://10.10.10.14:8081/
+      expected_status: 200
+      command: curl --fail --silent --show-error --max-time 5 http://10.10.10.14:8081/
+    - id: http-8082
+      type: http
+      url: http://10.10.10.14:8082/
+      expected_status: 200
+      command: curl --fail --silent --show-error --max-time 5 http://10.10.10.14:8082/

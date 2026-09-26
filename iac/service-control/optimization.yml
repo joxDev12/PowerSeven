@@ -55,6 +55,13 @@ components:
     risk: "JVM InitialRAM 10%/MaxRAM 55% test produced 780.7 MiB versus 768.3 MiB controlled baseline, so it was reverted; LibreOffice lazy loading was not applied because the current config has no endpoint and would disable essential conversions"
     reversible: true
     restart_required: true
+  scribble:
+    current: "two Pterodactyl server_process containers, same biosmarcel/scribble.rs:v0.9.12 image, ports 8081/8082, no Docker healthcheck, 24.19+26.16 MiB cgroup, CPU idle 0.00%"
+    proposed: 'one controller-owned logical unit; direct docker start/stop of the two allowlisted containers; restart="no"; HTTP 200 health on both ports; do not stop Wings/Pterodactyl or shared services'
+    estimated_ram_saving_gib: 0.0
+    risk: "Pterodactyl/Wings remains an external lifecycle owner; no standalone Scribble config or Compose project was found; controller handles only the two fixed container IDs"
+    reversible: true
+    restart_required: false
   mariadb:
     current: "cgroup 146 MiB; InnoDB buffer pool 128 MiB; max_connections 151"
     proposed: "On-demand for PTERODACTYL; 64 MiB buffer pool and max_connections 50 for a lab"

@@ -74,6 +74,12 @@ applications:
     unit: powerseven-app-scribble.service
     autostart: false
     requires: [docker.service]
+    containers: [8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5, 548ab28c-0e73-4706-a894-959a2d1b76a1]
+    healthchecks: [container-8081, container-8082, http-8081, http-8082]
+    restart_policy: "no"
+    image_version: "v0.9.12"
+    owner: pterodactyl_server_process
+    ram_baseline_mib: 50.35
   PTERODACTYL:
     unit: powerseven-app-pterodactyl.service
     autostart: false

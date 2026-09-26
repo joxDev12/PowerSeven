@@ -8,7 +8,7 @@ polkit.addRule(function(action, subject) {
         "powerseven-app-stirling.service",
         "powerseven-profile-pterodactyl.service",
         "powerseven-profile-wazuh.service",
-        "powerseven-profile-scribble.service",
+        "powerseven-app-scribble.service",
         "powerseven-stop-all-optional.service"
     ];
     var unit = action.lookup("unit");
