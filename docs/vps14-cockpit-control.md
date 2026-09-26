@@ -95,7 +95,7 @@ powerseven-app-forgejo.service
 powerseven-profile-stirling.service
 powerseven-app-pterodactyl-panel.service
 powerseven-app-pterodactyl-wings.service
-powerseven-profile-wazuh.service
+powerseven-app-wazuh.service
 powerseven-profile-scribble.service
 powerseven-stop-all-optional.service
 ```

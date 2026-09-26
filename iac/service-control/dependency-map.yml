@@ -58,7 +58,12 @@ applications:
     panel_reachability: required_for_fresh_start
   WAZUH:
     unit: powerseven-app-wazuh.service
-    requires: [wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service, filebeat.service]
+    requires: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
+    start_order: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
+    stop_order: [wazuh-dashboard.service, filebeat.service, wazuh-manager.service, wazuh-indexer.service]
+    ports: [1514/tcp, 1515/tcp, 55000/tcp, 9200/tcp, 8443/tcp]
+    health: [indexer_https_local, manager_api_local, filebeat_service, dashboard_https_local]
+    boot_policy: wrapper_and_native_units_disabled
 
 shared_dependencies:
   docker.service:

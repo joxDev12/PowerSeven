@@ -31,6 +31,12 @@ REDIS_SERVER = "redis-server.service"
 PHP_FPM = "php8.3-fpm.service"
 PTEROQ = "pteroq.service"
 WINGS = "wings.service"
+WAZUH_INDEXER = "wazuh-indexer.service"
+WAZUH_MANAGER = "wazuh-manager.service"
+WAZUH_DASHBOARD = "wazuh-dashboard.service"
+FILEBEAT = "filebeat.service"
+WAZUH_UNITS = (WAZUH_INDEXER, WAZUH_MANAGER, FILEBEAT, WAZUH_DASHBOARD)
+WAZUH_STOP_ORDER = tuple(reversed(WAZUH_UNITS))
 WINGS_CONFIG = Path("/etc/pterodactyl/config.yml")
 WINGS_API_URL = "http://127.0.0.1:8080"
 PTERODACTYL_NETWORK = "pterodactyl_nw"
@@ -69,10 +75,7 @@ APPLICATION_DEPENDENCIES = {
     "scribble": {"docker.service", WINGS},
     "pterodactyl-panel": {MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ},
     "pterodactyl-wings": {"docker.service"},
-    "wazuh": {
-        "wazuh-indexer.service", "wazuh-manager.service",
-        "wazuh-dashboard.service", "filebeat.service",
-    },
+    "wazuh": set(WAZUH_UNITS),
 }
 CORE_SERVICES = {
     "wg-quick@wg0.service", "ssh.socket", "docker.service", "nginx.service",
@@ -87,11 +90,16 @@ DEPENDENCY_UNITS = {
     PHP_FPM: PHP_FPM,
     PTEROQ: PTEROQ,
     WINGS: WINGS,
+    WAZUH_INDEXER: WAZUH_INDEXER,
+    WAZUH_MANAGER: WAZUH_MANAGER,
+    WAZUH_DASHBOARD: WAZUH_DASHBOARD,
+    FILEBEAT: FILEBEAT,
 }
 MANAGED_SERVICES = set(DEPENDENCY_UNITS.values()) | {WINGS, PTERODACTYL_PANEL_TIMER, PTERODACTYL_PANEL_SCHEDULER}
-STOPPABLE_DEPENDENCIES = {POSTGRESQL, REDIS, MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ}
+STOPPABLE_DEPENDENCIES = {POSTGRESQL, REDIS, MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ, *WAZUH_UNITS}
 DEPENDENCY_START_ORDER = (
     "docker.service", POSTGRESQL, MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ, REDIS, WINGS,
+    WAZUH_INDEXER, WAZUH_MANAGER, FILEBEAT, WAZUH_DASHBOARD,
 )
 APP_CONTAINERS = {
     "forgejo": (FORGEJO,),
@@ -153,6 +161,8 @@ def active_applications() -> set[str]:
         active.add("pterodactyl-panel")
     if service_active(WINGS):
         active.add("pterodactyl-wings")
+    if any(service_active(unit) for unit in WAZUH_UNITS):
+        active.add("wazuh")
     return active
 
 
@@ -168,7 +178,10 @@ def desired_dependencies(active: set[str]) -> set[str]:
 
 def actual_dependencies() -> set[str]:
     actual: set[str] = set()
-    for dependency in ("docker.service", POSTGRESQL, MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ, REDIS, WINGS):
+    for dependency in (
+        "docker.service", POSTGRESQL, MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ,
+        REDIS, WINGS, *WAZUH_UNITS,
+    ):
         if dependency == REDIS:
             present = container_running(NEXTCLOUD_REDIS)
         else:
@@ -237,6 +250,54 @@ def scribble_health() -> bool:
         ).returncode == 0
         for container in SCRIBBLE_CONTAINERS
     )
+
+
+def local_https_status(url: str, expected: set[str]) -> bool:
+    result = command(
+        [
+            "curl", "--silent", "--show-error", "--insecure",
+            "--connect-timeout", "3", "--max-time", "5",
+            "-o", "/dev/null", "-w", "%{http_code}", url,
+        ],
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() in expected
+
+
+def wazuh_indexer_health() -> bool:
+    return service_active(WAZUH_INDEXER) and local_https_status(
+        "https://127.0.0.1:9200/", {"200", "401", "403"}
+    )
+
+
+def wazuh_manager_health() -> bool:
+    if not service_active(WAZUH_MANAGER):
+        return False
+    status = command(["/var/ossec/bin/wazuh-control", "status"], timeout=20, check=False)
+    required = {
+        "wazuh-modulesd", "wazuh-logcollector", "wazuh-remoted",
+        "wazuh-analysisd", "wazuh-db", "wazuh-apid",
+    }
+    return status.returncode in {0, 1} and all(
+        f"{process} is running" in status.stdout for process in required
+    ) and local_https_status("https://127.0.0.1:55000/", {"200", "401", "403"})
+
+
+def wazuh_filebeat_health() -> bool:
+    return service_active(FILEBEAT)
+
+
+def wazuh_dashboard_health() -> bool:
+    return service_active(WAZUH_DASHBOARD) and local_https_status(
+        "https://127.0.0.1:8443/", {"200", "302", "401", "403"}
+    )
+
+
+def wazuh_health() -> bool:
+    return all((
+        wazuh_indexer_health(), wazuh_manager_health(),
+        wazuh_filebeat_health(), wazuh_dashboard_health(),
+    ))
 
 
 def pterodactyl_network_exists() -> bool:
@@ -320,6 +381,16 @@ def health_snapshot(active: set[str]) -> dict[str, str]:
         health["pterodactyl-panel"] = "PASS" if pterodactyl_panel_health() else "FAIL"
     if "pterodactyl-wings" in active:
         health["pterodactyl-wings"] = "PASS" if wings_health() else "FAIL"
+    wazuh_checks = {
+        WAZUH_INDEXER: wazuh_indexer_health,
+        WAZUH_MANAGER: wazuh_manager_health,
+        FILEBEAT: wazuh_filebeat_health,
+        WAZUH_DASHBOARD: wazuh_dashboard_health,
+    }
+    for unit, check in wazuh_checks.items():
+        health[unit] = "PASS" if check() else ("OFF" if not service_active(unit) else "FAIL")
+    if "wazuh" in active:
+        health["wazuh"] = "PASS" if wazuh_health() else "FAIL"
     return health
 
 
@@ -376,6 +447,8 @@ def ensure_dependency(dependency: str) -> None:
         wait_until(redis_ready, NEXTCLOUD_REDIS, 30)
     elif dependency == WINGS:
         ensure_wings_dependency()
+    elif dependency in WAZUH_UNITS:
+        ensure_wazuh_dependency(dependency)
     else:
         raise ControllerError(f"dependency start is not allowlisted: {dependency}")
 
@@ -406,6 +479,10 @@ def external_redis_consumer() -> tuple[bool, str]:
 
 def stop_unused_dependencies(required: set[str]) -> str:
     blocked: list[str] = []
+    for dependency in WAZUH_STOP_ORDER:
+        if dependency not in required and service_active(dependency):
+            command(["systemctl", "stop", dependency], timeout=210)
+            wait_until(lambda dependency=dependency: not service_active(dependency), f"{dependency} stop", 30)
     if PTEROQ not in required:
         stop_pterodactyl_scheduler()
         if service_active(PTEROQ):
@@ -485,6 +562,10 @@ def wait_for_wings() -> None:
     wait_until(wings_health, "Wings health", 60)
 
 
+def wait_for_wazuh() -> None:
+    wait_until(wazuh_health, "Wazuh stack health", 60)
+
+
 def wings_node_token() -> str:
     if not WINGS_CONFIG.is_file():
         raise ControllerError(f"Wings configuration is missing: {WINGS_CONFIG}")
@@ -548,6 +629,22 @@ def ensure_wings_dependency() -> None:
     finally:
         if temporary_panel:
             stop_pterodactyl_scheduler()
+
+
+def ensure_wazuh_dependency(dependency: str) -> None:
+    checks = {
+        WAZUH_INDEXER: (wazuh_indexer_health, 210),
+        WAZUH_MANAGER: (wazuh_manager_health, 75),
+        FILEBEAT: (wazuh_filebeat_health, 75),
+        WAZUH_DASHBOARD: (wazuh_dashboard_health, 120),
+    }
+    if dependency not in checks:
+        raise ControllerError(f"unknown Wazuh dependency: {dependency}")
+    if service_active(dependency):
+        wait_until(checks[dependency][0], f"{dependency} health", checks[dependency][1])
+        return
+    command(["systemctl", "start", dependency], timeout=checks[dependency][1] + 15)
+    wait_until(checks[dependency][0], f"{dependency} health", checks[dependency][1])
 
 
 def start_forgejo() -> None:
@@ -683,6 +780,21 @@ def stop_pterodactyl_wings() -> None:
     save_state(health=blocked or "PASS", failure=blocked)
 
 
+def start_wazuh() -> None:
+    reconcile(active_applications() | {"wazuh"})
+    wait_for_wazuh()
+    save_state()
+
+
+def stop_wazuh() -> None:
+    for unit in WAZUH_STOP_ORDER:
+        if service_active(unit):
+            command(["systemctl", "stop", unit], timeout=210)
+            wait_until(lambda unit=unit: not service_active(unit), f"{unit} stop", 30)
+    blocked = reconcile(active_applications())
+    save_state(health=blocked or "PASS", failure=blocked)
+
+
 def discover_actual_state() -> dict[str, object]:
     active = active_applications()
     required = desired_dependencies(active)
@@ -715,6 +827,7 @@ def self_check() -> int:
     assert desired_dependencies({"scribble"}) == {"docker.service", WINGS}
     assert desired_dependencies({"pterodactyl-panel"}) == {MARIADB, REDIS_SERVER, PHP_FPM, PTEROQ}
     assert desired_dependencies({"pterodactyl-wings"}) == {"docker.service"}
+    assert desired_dependencies({"wazuh"}) == set(WAZUH_UNITS)
     assert len(SCRIBBLE_CONTAINERS) == 2
     assert unit_for(POSTGRESQL) == POSTGRESQL_UNIT
     assert POSTGRESQL_UNIT in MANAGED_SERVICES
@@ -724,7 +837,11 @@ def self_check() -> int:
     assert PHP_FPM in STOPPABLE_DEPENDENCIES
     assert PTEROQ in STOPPABLE_DEPENDENCIES
     assert POSTGRESQL not in CORE_SERVICES
-    print("PASS: concrete PostgreSQL unit, desired-state union, shared Redis, and protected CORE")
+    assert WAZUH_INDEXER in MANAGED_SERVICES
+    assert WAZUH_MANAGER in MANAGED_SERVICES
+    assert WAZUH_DASHBOARD in MANAGED_SERVICES
+    assert FILEBEAT in MANAGED_SERVICES
+    print("PASS: desired-state union, Wazuh bounded lifecycle, concrete PostgreSQL, shared Redis, protected CORE")
     return 0
 
 
@@ -735,7 +852,7 @@ def main(argv: list[str]) -> int:
         return status()
     if argv == ["reconcile"]:
         action = reconcile_command
-    elif argv in (["forgejo", "start"], ["forgejo", "stop"], ["nextcloud", "start"], ["nextcloud", "stop"], ["stirling", "start"], ["stirling", "stop"], ["scribble", "start"], ["scribble", "stop"], ["pterodactyl-panel", "start"], ["pterodactyl-panel", "stop"], ["pterodactyl-wings", "start"], ["pterodactyl-wings", "stop"]):
+    elif argv in (["forgejo", "start"], ["forgejo", "stop"], ["nextcloud", "start"], ["nextcloud", "stop"], ["stirling", "start"], ["stirling", "stop"], ["scribble", "start"], ["scribble", "stop"], ["pterodactyl-panel", "start"], ["pterodactyl-panel", "stop"], ["pterodactyl-wings", "start"], ["pterodactyl-wings", "stop"], ["wazuh", "start"], ["wazuh", "stop"]):
         action = {
             ("forgejo", "start"): start_forgejo,
             ("forgejo", "stop"): stop_forgejo,
@@ -749,9 +866,11 @@ def main(argv: list[str]) -> int:
             ("pterodactyl-panel", "stop"): stop_pterodactyl_panel,
             ("pterodactyl-wings", "start"): start_pterodactyl_wings,
             ("pterodactyl-wings", "stop"): stop_pterodactyl_wings,
+            ("wazuh", "start"): start_wazuh,
+            ("wazuh", "stop"): stop_wazuh,
         }[(argv[0], argv[1])]
     else:
-        print("usage: powerseven-controller {forgejo|nextcloud|stirling|scribble|pterodactyl-panel|pterodactyl-wings} {start|stop} | status | reconcile | self-check", file=sys.stderr)
+        print("usage: powerseven-controller {forgejo|nextcloud|stirling|scribble|pterodactyl-panel|pterodactyl-wings|wazuh} {start|stop} | status | reconcile | self-check", file=sys.stderr)
         return 2
 
     LOCK_PATH.parent.mkdir(mode=0o755, parents=True, exist_ok=True)

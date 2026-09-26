@@ -135,6 +135,33 @@ profiles:
       type: systemd
       unit: wazuh-indexer.service
       command: systemctl is-active --quiet wazuh-indexer.service
+    - id: indexer_https_local
+      type: http
+      url: https://127.0.0.1:9200/
+      expected_status: [200, 401, 403]
+      command: curl --silent --show-error --insecure --connect-timeout 3 --max-time 5 -o /dev/null -w '%{http_code}' https://127.0.0.1:9200/
+    - id: manager
+      type: systemd
+      unit: wazuh-manager.service
+      command: systemctl is-active --quiet wazuh-manager.service
+    - id: manager_api_local
+      type: http
+      url: https://127.0.0.1:55000/
+      expected_status: [200, 401, 403]
+      command: curl --silent --show-error --insecure --connect-timeout 3 --max-time 5 -o /dev/null -w '%{http_code}' https://127.0.0.1:55000/
+    - id: filebeat_service
+      type: systemd
+      unit: filebeat.service
+      command: systemctl is-active --quiet filebeat.service
+    - id: dashboard
+      type: systemd
+      unit: wazuh-dashboard.service
+      command: systemctl is-active --quiet wazuh-dashboard.service
+    - id: dashboard_https_local
+      type: http
+      url: https://127.0.0.1:8443/
+      expected_status: [200, 302, 401, 403]
+      command: curl --silent --show-error --insecure --connect-timeout 3 --max-time 5 -o /dev/null -w '%{http_code}' https://127.0.0.1:8443/
 
   scribble:
     - id: wings-control-plane

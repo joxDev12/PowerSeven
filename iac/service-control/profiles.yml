@@ -109,7 +109,18 @@ applications:
   WAZUH:
     unit: powerseven-app-wazuh.service
     autostart: false
-    requires: [wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service, filebeat.service]
+    requires: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
+    start_order: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
+    stop_order: [wazuh-dashboard.service, filebeat.service, wazuh-manager.service, wazuh-indexer.service]
+    healthchecks: [indexer_https_local, manager_api_local, filebeat_service, dashboard_https_local]
+    ports: [1514/tcp, 1515/tcp, 55000/tcp, 9200/tcp, 8443/tcp]
+    native_units: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
+    native_units_enabled_at_boot: false
+    agent_count_baseline: 2
+    ram_baseline_cgroup_mib: 4453.4
+    indexer_heap_mib: [1024, 1024]
+    indexer_direct_memory_mib: 512
+    tuning_applied: false
 
 resource_baseline:
   forgejo_container_mib: 193.2

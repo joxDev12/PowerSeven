@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Wazuh optional security stack
+After=powerseven-core.target network-online.target
+Wants=powerseven-core.target network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller wazuh start
+ExecStop=/usr/local/libexec/powerseven-controller wazuh stop
+TimeoutStartSec=8min
+TimeoutStopSec=5min
+
+[Install]
+WantedBy=multi-user.target

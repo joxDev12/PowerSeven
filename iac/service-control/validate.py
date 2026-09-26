@@ -143,6 +143,23 @@ def main() -> int:
         fail("Pterodactyl Wings network healthcheck is missing")
     if not any(check.get("id") == "panel-reachability-for-fresh-start" for check in wings_checks):
         fail("Pterodactyl Wings fresh-start panel reachability check is missing")
+    wazuh_requires = [
+        "wazuh-indexer.service", "wazuh-manager.service",
+        "filebeat.service", "wazuh-dashboard.service",
+    ]
+    wazuh_checks = healthchecks.get("profiles", {}).get("wazuh", [])
+    if apps.get("WAZUH", {}).get("requires") != wazuh_requires:
+        fail("Wazuh dependency declaration or order is incorrect")
+    if profiles.get("applications", {}).get("WAZUH", {}).get("requires") != wazuh_requires:
+        fail("Wazuh profile dependency declaration is incorrect")
+    if profiles.get("applications", {}).get("WAZUH", {}).get("native_units_enabled_at_boot") is not False:
+        fail("Wazuh native units must be disabled at boot")
+    if {check.get("unit") for check in wazuh_checks if check.get("unit")} < set(wazuh_requires):
+        fail("Wazuh systemd healthchecks are incomplete")
+    if not {check.get("id") for check in wazuh_checks} >= {
+        "indexer_https_local", "manager_api_local", "filebeat_service", "dashboard_https_local",
+    }:
+        fail("Wazuh local endpoint healthchecks are incomplete")
 
     components = optimization.get("components", {})
     if "forgejo" not in components or "postgresql" not in components or "pterodactyl-panel" not in components:
@@ -158,6 +175,7 @@ def main() -> int:
         "powerseven-app-scribble.service",
         "powerseven-app-pterodactyl-panel.service",
         "powerseven-app-pterodactyl-wings.service",
+        "powerseven-app-wazuh.service",
         "powerseven-pterodactyl-schedule.service",
         "powerseven-pterodactyl-schedule.timer",
         "powerseven-wg-final-dns.service",
@@ -175,6 +193,8 @@ def main() -> int:
         fail("legacy Scribble profile unit must not remain")
     if "powerseven-profile-pterodactyl.service" in names:
         fail("legacy Pterodactyl profile unit must not remain")
+    if "powerseven-profile-wazuh.service" in names:
+        fail("legacy Wazuh profile unit must not remain")
     dns_unit = systemd / "powerseven-wg-final-dns.service"
     dns_text = dns_unit.read_text(encoding="utf-8")
     for required_dns_line in (
@@ -218,6 +238,11 @@ def main() -> int:
         fail("controller lacks Wings panel reachability precondition")
     if "mariadb.service" not in controller or "redis-server.service" not in controller or "php8.3-fpm.service" not in controller:
         fail("controller lacks Pterodactyl shared dependencies")
+    if not all(token in controller for token in (
+        "WAZUH_INDEXER", "WAZUH_MANAGER", "WAZUH_DASHBOARD", "FILEBEAT",
+        "def start_wazuh", "def stop_wazuh", "def wazuh_health",
+    )):
+        fail("controller lacks bounded Wazuh lifecycle and health handling")
     if not (systemd / "wings.service.d" / "powerseven.conf").exists():
         fail("Wings controller-owned restart policy override is missing")
     if "postgresql.service" in controller:
@@ -230,6 +255,11 @@ def main() -> int:
     scribble_stop = controller.split("def stop_scribble", 1)[1].split("def start_pterodactyl_scheduler", 1)[0]
     if '"docker", "start"' in scribble_start or '"docker", "stop"' in scribble_stop:
         fail("Scribble lifecycle must not directly start or stop Docker containers")
+    wazuh_unit = (systemd / "powerseven-app-wazuh.service").read_text(encoding="utf-8")
+    if "TimeoutStartSec=8min" not in wazuh_unit or "TimeoutStopSec=5min" not in wazuh_unit:
+        fail("Wazuh app unit must have bounded lifecycle timeouts")
+    if "Restart=" in wazuh_unit or "WantedBy=multi-user.target" not in wazuh_unit:
+        fail("Wazuh app unit must be controller-owned and non-restarting")
 
     if failures:
         print(f"SUMMARY: FAIL={len(failures)}")

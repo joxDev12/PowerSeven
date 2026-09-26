@@ -7,21 +7,21 @@ notes:
 
 components:
   wazuh-indexer:
-    current: "RSS 1.68 GiB; cgroup 1.75 GiB; JVM Xms/Xmx 1024 MiB; direct memory 512 MiB"
+    current: "RSS 1.69 GiB; cgroup 1.78 GiB; JVM Xms/Xmx 1024 MiB; direct memory 512 MiB"
     proposed: "WAZUH profile only; validate Xms/Xmx 512 MiB and MaxDirectMemorySize 256 MiB"
     estimated_ram_saving_gib: 0.6
     risk: "GC pressure, slower indexing, reduced burst capacity"
     reversible: true
     restart_required: true
   wazuh-dashboard:
-    current: "PSS 209 MiB; cgroup 187 MiB"
+    current: "process RSS 212 MiB; cgroup 188 MiB"
     proposed: "WAZUH profile only; cap Node heap only after UI acceptance"
     estimated_ram_saving_gib: 0.05
     risk: "dashboard crash under large searches"
     reversible: true
     restart_required: true
   wazuh-manager:
-    current: "14 processes; manager cgroup 2.31 GiB; PSS 0.95 GiB"
+    current: "14 processes; manager cgroup 2.36 GiB; major process RSS modulesd 520 MiB, API tree ~395 MiB"
     proposed: "WAZUH profile only; keep agents disconnected when unused; disable optional collectors only with evidence"
     estimated_ram_saving_gib: 0.25
     risk: "loss of inventory/vulnerability telemetry"

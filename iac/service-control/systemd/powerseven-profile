@@ -52,15 +52,13 @@ health() {
 stop_optional() {
     compose soc-cloud stop cron app redis || true
     compose soc-forgejo stop forgejo || true
-    /usr/bin/systemctl stop powerseven-app-pterodactyl-panel.service powerseven-app-pterodactyl-wings.service || true
-    /usr/bin/systemctl stop filebeat.service wazuh-dashboard.service wazuh-manager.service wazuh-indexer.service || true
+    /usr/bin/systemctl stop powerseven-app-pterodactyl-panel.service powerseven-app-pterodactyl-wings.service powerseven-app-wazuh.service || true
 }
 
 stop_profile() {
     case "$1" in
         nextcloud) compose soc-cloud stop cron app redis ;;
         forgejo) compose soc-forgejo stop forgejo ;;
-        wazuh) /usr/bin/systemctl stop wazuh-dashboard.service wazuh-manager.service filebeat.service wazuh-indexer.service ;;
         none|NONE|FAILED|CORE|all-off) : ;;
         *) echo "unsupported profile stop: $1" >&2; return 2 ;;
     esac
@@ -73,8 +71,6 @@ run_action() {
         nextcloud:stop) stop_profile nextcloud ;;
         forgejo:start) compose soc-forgejo up -d forgejo ;;
         forgejo:stop) stop_profile forgejo ;;
-        wazuh:start) : ;;
-        wazuh:stop) stop_profile wazuh ;;
         dashboard:health) health dashboard ;;
         all-off:start) stop_optional ;;
         all-off:health) health all-off ;;
