@@ -1,0 +1,108 @@
+schema_version: 1
+scope: target_local_vmware
+principles:
+  - CORE is the only boot target.
+  - Profile units may require CORE but never stop CORE.
+  - Profile stop leaves shared dependencies available for a fast switch.
+  - ALL-OFF-OPTIONAL is the only unit allowed to stop optional dependencies.
+  - WireGuard and SSH are outside every optional stop set.
+
+protected_core:
+  units:
+    - wg-quick@wg0.service
+    - ssh.socket
+    - docker.service
+    - nginx.service
+    - postgresql.service
+    - azienda-portal.service
+    - powerseven-dashboard-health.service
+    - powerseven-core.target
+    - powerseven-core-adguard.service
+    - cockpit.socket
+  forbidden_actions_from_optional: [stop, restart]
+
+profiles:
+  CORE:
+    requires: []
+    conflicts: []
+    controller_action: start-core
+  NEXTCLOUD:
+    requires: [CORE, id_ldap, postgresql.service]
+    conflicts: [FORGEJO, STIRLING, PTERODACTYL, WAZUH, PORTAL, SCRIBBLE]
+    controller_action: nextcloud
+  FORGEJO:
+    requires: [CORE, id_ldap, postgresql.service]
+    conflicts: [NEXTCLOUD, STIRLING, PTERODACTYL, WAZUH, PORTAL, SCRIBBLE]
+    controller_action: forgejo
+  STIRLING:
+    requires: [CORE]
+    conflicts: [NEXTCLOUD, FORGEJO, PTERODACTYL, WAZUH, PORTAL, SCRIBBLE]
+    controller_action: stirling
+  PTERODACTYL:
+    requires: [CORE, mariadb.service, redis-server.service, docker.service]
+    conflicts: [NEXTCLOUD, FORGEJO, STIRLING, WAZUH, PORTAL, SCRIBBLE]
+    controller_action: pterodactyl
+  WAZUH:
+    requires: [CORE, filebeat.service, wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service]
+    conflicts: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, PORTAL, SCRIBBLE]
+    controller_action: wazuh
+  PORTAL:
+    class: core_component
+    requires: [CORE, postgresql.service]
+    conflicts: []
+    controller_action: dashboard
+  SCRIBBLE:
+    requires: [CORE]
+    conflicts: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH, PORTAL]
+    controller_action: scribble
+  ALL-OFF-OPTIONAL:
+    requires: [CORE]
+    conflicts: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH, PORTAL, SCRIBBLE]
+    controller_action: stop-all-optional
+
+shared_services:
+  docker.service:
+    owner: CORE
+    stop_policy: never_from_profile
+  nginx.service:
+    owner: CORE
+    stop_policy: never_from_profile
+  postgresql.service:
+    consumers: [CORE/dashboard, NEXTCLOUD, FORGEJO]
+    core_reason: dashboard_current_dependency
+    future_stop_policy: on-demand_only_after_AD_dashboard_migration
+    stop_policy: never_while_dashboard_current
+  azienda-portal.service:
+    owner: CORE
+    database: azienda_lab
+    stop_policy: never_from_profile
+  powerseven-dashboard-health.service:
+    owner: CORE
+    stop_policy: never_from_profile
+  powerseven-core-adguard.service:
+    owner: CORE
+    stop_policy: never_from_profile
+  cockpit.socket:
+    owner: CORE
+    stop_policy: never_from_profile
+  mariadb.service:
+    consumers: [PTERODACTYL]
+    stop_policy: ALL-OFF-OPTIONAL_only
+  redis-server.service:
+    consumers: [PTERODACTYL]
+    stop_policy: ALL-OFF-OPTIONAL_only
+
+all_off:
+  leaves_running: [wg-quick@wg0.service, ssh.socket, docker.service, nginx.service, postgresql.service, azienda-portal.service, powerseven-dashboard-health.service, powerseven-core-adguard.service, cockpit.socket, powerseven-core.target]
+  stops_systemd:
+    - mariadb.service
+    - redis-server.service
+    - php8.3-fpm.service
+    - pteroq.service
+    - wings.service
+    - filebeat.service
+    - wazuh-dashboard.service
+    - wazuh-manager.service
+    - wazuh-indexer.service
+  stops_compose_projects: [soc-cloud, soc-forgejo, soc-stirling]
+  stops_container_labels: ["Service=Pterodactyl"]

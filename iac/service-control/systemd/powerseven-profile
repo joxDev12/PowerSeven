@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Install as root-owned /usr/local/libexec/powerseven-profile (0750 root).
+# The case list is deliberately finite: Cockpit cannot turn this into a shell.
+profile=${1:-}
+action=${2:-}
+state_dir=/run/powerseven
+lock_file=/run/lock/powerseven-profile.lock
+exec 9>"$lock_file"
+/usr/bin/flock -x 9
+
+write_state() {
+    /usr/bin/install -d -m 0755 "$state_dir"
+    /usr/bin/printf '%s\n' "$1" >"$state_dir/active-profile"
+    /usr/bin/date --iso-8601=seconds >"$state_dir/last-transition"
+}
+
+write_snapshot() {
+    local health_state=$1
+    /usr/bin/systemctl list-units --type=service --state=active --no-legend >"$state_dir/services"
+    /usr/bin/printf '%s\n' "$health_state" >"$state_dir/health"
+    /usr/bin/free --bytes | /usr/bin/awk '/^Mem:/ {print "total_bytes=" $2 " available_bytes=" $7}' >"$state_dir/ram"
+}
+
+fail_transition() {
+    write_state FAILED
+    /usr/bin/date --iso-8601=seconds >"$state_dir/last-failure"
+    write_snapshot FAIL
+    echo "PowerSeven transition failed: $profile:$action" >&2
+    exit 1
+}
+
+compose() {
+    local project=$1; shift
+    /usr/bin/docker compose --project-directory "/opt/$project" -f "/opt/$project/compose.yaml" "$@"
+}
+
+health() {
+    case "$1" in
+        core) systemctl is-active --quiet docker.service && systemctl is-active --quiet nginx.service && systemctl is-active --quiet postgresql.service && systemctl is-active --quiet azienda-portal.service && curl --fail --silent --show-error http://127.0.0.1:5000/ >/dev/null ;;
+        nextcloud) curl --fail --silent --show-error http://127.0.0.1:8083/status.php >/dev/null ;;
+        forgejo) curl --fail --silent --show-error http://127.0.0.1:3001/ >/dev/null ;;
+        stirling) test "$(/usr/bin/docker inspect --format '{{with (index .State "Health")}}{{.Status}}{{end}}' soc-stirling-stirling-1)" = healthy ;;
+        pterodactyl) systemctl is-active --quiet mariadb.service && curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/ | grep -Eq '^(200|401)$' ;;
+        wazuh) systemctl is-active --quiet wazuh-indexer.service && systemctl is-active --quiet wazuh-manager.service && curl --fail --silent --insecure https://127.0.0.1:8443/ >/dev/null ;;
+        dashboard) curl --fail --silent --show-error http://127.0.0.1:5000/ >/dev/null ;;
+        scribble) timeout 3 bash -c '</dev/tcp/127.0.0.1/8081' && timeout 3 bash -c '</dev/tcp/127.0.0.1/8082' ;;
+        all-off) health core ;;
+        *) return 2 ;;
+    esac
+}
+
+stop_optional() {
+    compose soc-cloud stop cron app redis || true
+    compose soc-forgejo stop forgejo || true
+    compose soc-stirling stop stirling || true
+    if [ -f /opt/powerseven/compose.yaml ]; then
+        /usr/bin/docker compose --project-directory /opt/powerseven -f /opt/powerseven/compose.yaml stop scribble-1 scribble-2 || true
+    fi
+    /usr/bin/docker ps --filter label=Service=Pterodactyl -q | xargs -r /usr/bin/docker stop
+    /usr/bin/systemctl stop pteroq.service wings.service php8.3-fpm.service redis-server.service mariadb.service filebeat.service wazuh-dashboard.service wazuh-manager.service wazuh-indexer.service || true
+}
+
+stop_profile() {
+    case "$1" in
+        nextcloud) compose soc-cloud stop cron app redis ;;
+        forgejo) compose soc-forgejo stop forgejo ;;
+        stirling) compose soc-stirling stop stirling ;;
+        pterodactyl)
+            /usr/bin/docker ps --filter label=Service=Pterodactyl -q | xargs -r /usr/bin/docker stop
+            /usr/bin/systemctl stop wings.service pteroq.service php8.3-fpm.service redis-server.service mariadb.service || true
+            ;;
+        wazuh) /usr/bin/systemctl stop wazuh-dashboard.service wazuh-manager.service filebeat.service wazuh-indexer.service ;;
+        scribble)
+            if [ -f /opt/powerseven/compose.yaml ]; then
+                /usr/bin/docker compose --project-directory /opt/powerseven -f /opt/powerseven/compose.yaml stop scribble-1 scribble-2
+            fi
+            ;;
+        none|NONE|FAILED|CORE|all-off) : ;;
+        *) echo "unsupported profile stop: $1" >&2; return 2 ;;
+    esac
+}
+
+run_action() {
+    case "$profile:$action" in
+        core:start) compose soc-adguard up -d adguard ;;
+        nextcloud:start) compose soc-cloud up -d redis app cron ;;
+        nextcloud:stop) stop_profile nextcloud ;;
+        forgejo:start) compose soc-forgejo up -d forgejo ;;
+        forgejo:stop) stop_profile forgejo ;;
+        stirling:start) compose soc-stirling up -d stirling ;;
+        stirling:stop) stop_profile stirling ;;
+        pterodactyl:start) : ;;
+        pterodactyl:stop) stop_profile pterodactyl ;;
+        wazuh:start) : ;;
+        wazuh:stop) stop_profile wazuh ;;
+        dashboard:health) health dashboard ;;
+        scribble:start) /usr/bin/docker compose --project-directory /opt/powerseven -f /opt/powerseven/compose.yaml up -d scribble-1 scribble-2 ;;
+        scribble:stop) stop_profile scribble ;;
+        all-off:start) stop_optional ;;
+        all-off:health) health all-off ;;
+        *:health) health "$profile" ;;
+        *) echo "unsupported PowerSeven action" >&2; return 2 ;;
+    esac
+}
+
+case "$action" in
+    start)
+        previous=$(cat "$state_dir/active-profile" 2>/dev/null || true)
+        case "$previous" in TRANSITIONING:*) previous=${previous#TRANSITIONING:} ;; esac
+        write_state "TRANSITIONING:$profile"
+        case "$previous" in
+            ""|"$profile") ;;
+            *) stop_profile "$previous" ;;
+        esac
+        set +e
+        run_action
+        result=$?
+        set -e
+        [ "$result" -eq 0 ] || fail_transition
+        [ "$profile" = all-off ] && write_state NONE || write_state "$profile"
+        write_snapshot STARTED
+        ;;
+    stop)
+        set +e
+        run_action
+        result=$?
+        set -e
+        [ "$result" -eq 0 ] || fail_transition
+        current=$(cat "$state_dir/active-profile" 2>/dev/null || true)
+        [ "$current" = "$profile" ] && write_state NONE
+        write_snapshot STOPPED
+        ;;
+    health)
+        set +e
+        run_action
+        result=$?
+        set -e
+        [ "$result" -eq 0 ] || fail_transition
+        write_snapshot PASS
+        ;;
+    *) echo "unsupported action" >&2; exit 2 ;;
+esac

@@ -230,7 +230,9 @@ vuoti `azienda_lab`, `forgejo`, `nextcloud`, `postgres`, `panel` e ruoli nuovi.
 **Prerequisiti:** Docker, database, LDAP/LDAPS, cert.
 
 **Azioni:** deployare Nextcloud, Forgejo, Stirling PDF, azienda-portal e
-Scribble con config nuova. Creare nuovi volumi; non copiare volumi Azure.
+Scribble con config nuova. `azienda-portal` è la dashboard CORE e deve essere
+installato/configurato prima dell'abilitazione di `powerseven-core.target`.
+Creare nuovi volumi; non copiare volumi Azure.
 Configurare LDAP/LDAPS e connessioni DB con placeholder.
 
 **Configurazione attesa:** backend loopback/Docker, DNS names `*.lab.test`.
@@ -294,6 +296,33 @@ configurare cert nuovi; pubblicare Dashboard via Nginx.
 **Successo:** Manager vede agenti nuovi.
 
 **Rollback:** rimuovere solo stack Wazuh nuovo e suoi indici vuoti.
+
+## Fase 12A — service profiles e Cockpit
+
+**Obiettivo:** boot CORE-only e un solo profilo applicativo alla volta.
+
+**Prerequisiti:** Docker, servizi host e applicazioni installati; unità
+WireGuard locale verificata; nessun secret nel repository.
+
+**Azioni:** renderizzare `iac/service-control/systemd/`, impostare il nome
+reale dell'unità WireGuard, configurare `restart: "no"` nei Compose, abilitare
+solo `powerseven-core.target`, installare Cockpit e socket activation in una
+fase separata, quindi applicare Polkit dopo il test con un account non-sudo.
+
+**Configurazione attesa:** boot = CORE + ALL-OFF-OPTIONAL; CORE contiene
+WireGuard, SSH, Nginx, dashboard azienda-portal, AdGuard, Cockpit socket e
+PostgreSQL temporaneo (`azienda_lab`). MariaDB/Redis, Wazuh e app optional non
+partono da soli; ogni profilo ha health check. Docker resta CORE solo perché
+AdGuard è ancora containerizzato.
+
+La dashboard PowerSeven resta la GUI principale (`login.lab.test` via Nginx).
+Cockpit su `https://10.10.10.14:9090` è la GUI tecnica; non creare un plugin
+Cockpit custom. L’accesso è limitato alla VPN, con Polkit per
+`powerseven-operators`.
+
+**Test:** avviare ogni profilo da Cockpit, verificare stop del precedente,
+CORE invariato, RAM/CPU, health check e kill switch. Non eseguire questa fase
+su Azure durante la discovery.
 
 ## Fase 13 — VPS12 e domain join
 

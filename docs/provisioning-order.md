@@ -126,7 +126,7 @@ Installare/configurare nuovi:
 1. Nextcloud;
 2. Forgejo;
 3. Stirling PDF;
-4. azienda-portal;
+4. azienda-portal (CORE dashboard, not an optional profile);
 5. Scribble;
 6. Pterodactyl Panel su MariaDB.
 
@@ -173,3 +173,14 @@ risoluzione DNS e telemetria Wazuh.
 Eseguire [local-acceptance-tests.md](local-acceptance-tests.md). Se fallisce,
 correggere solo fase responsabile; non fare rollback globale e non toccare
 Azure.
+
+## Regola trasversale VPS14
+
+Dopo l'installazione dei servizi, il boot locale deve abilitare solo CORE e
+`ALL-OFF-OPTIONAL`. CORE comprende WireGuard, SSH, Nginx, dashboard,
+AdGuard, Cockpit socket e PostgreSQL temporaneo finché la dashboard usa
+`azienda_lab`. Il controllo applicativo usa le unità dichiarate in
+[`iac/service-control/`](../iac/service-control/README.md); i container non
+possono usare restart policy che bypassano il controller. Cockpit standard è
+la GUI tecnica prevista, con Polkit ristretto alle unità optional profile. La
+dashboard PowerSeven resta la GUI principale e legge status read-only.

@@ -1,0 +1,133 @@
+schema_version: 1
+scope: target_local_vmware
+profiles:
+  core:
+    - id: wireguard
+      type: systemd
+      unit: wg-quick@wg0.service
+      command: systemctl is-active --quiet wg-quick@wg0.service
+    - id: ssh
+      type: systemd
+      unit: ssh.socket
+      command: systemctl is-active --quiet ssh.socket
+    - id: docker
+      type: systemd
+      unit: docker.service
+      command: systemctl is-active --quiet docker.service
+    - id: nginx
+      type: systemd
+      unit: nginx.service
+      command: systemctl is-active --quiet nginx.service
+    - id: postgresql-dashboard-dependency
+      type: systemd
+      unit: postgresql.service
+      command: systemctl is-active --quiet postgresql.service
+    - id: dashboard
+      type: http
+      url: http://127.0.0.1:5000/
+      expected_status: 200
+      command: curl --fail --silent --show-error http://127.0.0.1:5000/
+    - id: cockpit-socket
+      type: systemd
+      unit: cockpit.socket
+      command: systemctl is-active --quiet cockpit.socket
+    - id: adguard
+      type: dns
+      address: 10.10.10.14
+      port: 53
+      command: dig +short @10.10.10.14 example.com A
+
+  nextcloud:
+    - id: database
+      type: systemd
+      unit: postgresql.service
+      command: systemctl is-active --quiet postgresql.service
+    - id: app
+      type: http
+      url: http://127.0.0.1:8083/status.php
+      expected_status: 200
+      command: curl --fail --silent --show-error http://127.0.0.1:8083/status.php
+
+  forgejo:
+    - id: database
+      type: systemd
+      unit: postgresql.service
+      command: systemctl is-active --quiet postgresql.service
+    - id: app
+      type: http
+      url: http://127.0.0.1:3001/
+      expected_status: 200
+      command: curl --fail --silent --show-error http://127.0.0.1:3001/
+
+  stirling:
+    - id: container
+      type: docker
+      container: soc-stirling-stirling-1
+      command: docker inspect --format '{{.State.Health.Status}}' soc-stirling-stirling-1
+    - id: app
+      type: http
+      url: http://127.0.0.1:8084/
+      expected_status: [200, 401, 302]
+      command: curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8084/
+
+  pterodactyl:
+    - id: mariadb
+      type: systemd
+      unit: mariadb.service
+      command: systemctl is-active --quiet mariadb.service
+    - id: panel
+      type: http
+      url: https://127.0.0.1/
+      expected_status: [200, 302]
+      command: curl --fail --silent --show-error --insecure --resolve panel.lab.test:443:127.0.0.1 https://panel.lab.test/
+    - id: wings
+      type: http
+      url: http://127.0.0.1:8080/
+      expected_status: [200, 401]
+      command: curl --silent --show-error --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/
+
+  wazuh:
+    - id: indexer
+      type: systemd
+      unit: wazuh-indexer.service
+      command: systemctl is-active --quiet wazuh-indexer.service
+    - id: manager
+      type: systemd
+      unit: wazuh-manager.service
+      command: systemctl is-active --quiet wazuh-manager.service
+    - id: dashboard
+      type: http
+      url: https://127.0.0.1:8443/
+      expected_status: 200
+      command: curl --fail --silent --show-error --insecure https://127.0.0.1:8443/
+
+  portal:
+    - id: service
+      type: systemd
+      unit: azienda-portal.service
+      command: systemctl is-active --quiet azienda-portal.service
+    - id: app
+      type: http
+      url: http://127.0.0.1:5000/
+      expected_status: 200
+      command: curl --fail --silent --show-error http://127.0.0.1:5000/
+
+  scribble:
+    - id: first
+      type: tcp
+      address: 127.0.0.1
+      port: 8081
+      command: timeout 3 bash -c '</dev/tcp/127.0.0.1/8081'
+    - id: second
+      type: tcp
+      address: 127.0.0.1
+      port: 8082
+      command: timeout 3 bash -c '</dev/tcp/127.0.0.1/8082'
+
+  all-off:
+    - id: core-only
+      type: policy
+      command: systemctl is-active --quiet powerseven-core.target
+    - id: no-optional-profile
+      type: policy
+      command: test -z "$(systemctl list-units 'powerseven-profile-*.service' --state=active --no-legend)"

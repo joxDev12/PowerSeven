@@ -5,6 +5,20 @@ scope:
   target_local: vmware_rebuild
   persistent_application_data: out_of_scope
 
+service_control:
+  declaration: ../service-control/profiles.yml
+  boot_profile: ALL-OFF-OPTIONAL
+  core_profile: CORE
+  optional_profiles: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH, SCRIBBLE]
+  core_components: [WIREGUARD, SSH, NGINX, DASHBOARD, ADGUARD, COCKPIT_SOCKET]
+  temporary_core_components: [POSTGRESQL]
+  postgresql_core_reason: dashboard_current_dependency
+  dashboard_current_database: azienda_lab
+  dashboard_future_identity_source: AD_LDAP_primary_not_implemented
+  docker_current_decision: CORE_for_current_AdGuard_container
+  docker_future_decision: on_demand_if_AdGuard_native_and_no_other_CORE_consumer
+  controller_installation: target_local_only; not_applied_to_azure
+
 provisioning_order:
   - order: 0
     phase: host_vmware_preparation
@@ -55,6 +69,7 @@ provisioning_order:
     provides: [cert_soc_lab_ca, id_ldaps, db_postgresql, db_mariadb, db_redis]
     requires: [id_ad_ds, app_adguard, svc_docker]
     data_policy: create_empty_datastores_only
+    service_control_note: PostgreSQL is temporary CORE while azienda-portal uses azienda_lab
   - order: 9
     phase: application_deployment
     parallel: true

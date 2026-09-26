@@ -4,7 +4,7 @@ services:
   adguard:
     image: "${ADGUARD_IMAGE}"
     container_name: powerseven-adguard
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "192.168.214.14:53:53/tcp"
       - "192.168.214.14:53:53/udp"
@@ -17,7 +17,7 @@ services:
   nextcloud:
     image: "${NEXTCLOUD_IMAGE}"
     container_name: powerseven-nextcloud
-    restart: unless-stopped
+    restart: "no"
     ports: ["127.0.0.1:8083:80"]
     environment:
       POSTGRES_HOST: "${POSTGRES_HOST}"
@@ -31,14 +31,14 @@ services:
   nextcloud-redis:
     image: "${REDIS_IMAGE}"
     container_name: powerseven-nextcloud-redis
-    restart: unless-stopped
+    restart: "no"
     volumes: [nextcloud_redis:/data]
     networks: [cloud]
 
   forgejo:
     image: "${FORGEJO_IMAGE}"
     container_name: powerseven-forgejo
-    restart: unless-stopped
+    restart: "no"
     ports: ["127.0.0.1:3001:3000"]
     environment:
       FORGEJO__database__HOST: "${POSTGRES_HOST}:${POSTGRES_PORT}"
@@ -50,7 +50,7 @@ services:
   stirling:
     image: "${STIRLING_IMAGE}"
     container_name: powerseven-stirling
-    restart: unless-stopped
+    restart: "no"
     ports: ["127.0.0.1:8084:8080"]
     volumes: [stirling_data:/configs]
     networks: [stirling]
@@ -58,14 +58,14 @@ services:
   scribble-1:
     image: "${SCRIBBLE_IMAGE}"
     container_name: powerseven-scribble-1
-    restart: unless-stopped
+    restart: "no"
     ports: ["127.0.0.1:8081:8080"]
     networks: [scribble]
 
   scribble-2:
     image: "${SCRIBBLE_IMAGE}"
     container_name: powerseven-scribble-2
-    restart: unless-stopped
+    restart: "no"
     ports: ["127.0.0.1:8082:8080"]
     networks: [scribble]
 

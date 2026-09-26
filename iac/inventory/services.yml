@@ -22,6 +22,19 @@ dns_bootstrap:
   dc02_forwarder_initial: 192.168.214.2
   dc02_forwarder_final: 192.168.214.14
   switch_after: app_adguard
+service_control:
+  declaration: ../service-control/profiles.yml
+  boot_profile: ALL-OFF-OPTIONAL
+  core_profile: CORE
+  docker_restart_policy_target: "no"
+  current_azure_observation: profile control not installed; application units and container restart policies are independent
+  core_components: [svc_wireguard_hub, svc_ssh_vps14, svc_nginx, app_portal, app_adguard, cockpit_socket]
+  temporary_core: [db_postgresql]
+  postgresql_core_reason: dashboard_current_dependency
+  dashboard_database_current: azienda_lab
+  dashboard_future_identity: AD_LDAP_primary_not_implemented
+  docker_current: CORE_because_app_adguard_is_containerized
+  docker_future: on_demand_only_after_native_adguard_migration
 services:
   - graph_id: svc_wireguard_vps12
     host: vps12
@@ -43,8 +56,9 @@ services:
     host: vps14
     kind: system
     name: WireGuard HUB
-    unit: wg-quick@wg-final
-    unit_state: planned_candidate; verify during implementation
+    unit: wg-quick@wg0
+    unit_state: observed_current_azure
+    target_local_unit: verify_after_local_wireguard_configuration
     ports: [51820/udp]
     persistent: true
     secret_refs: [wireguard_server_private_key, wireguard_peer_config]
@@ -130,12 +144,15 @@ services:
     proxies_to: [app_nextcloud, app_forgejo, app_stirling, app_adguard, app_portal, app_pterodactyl, svc_wings, app_scribble]
     uses_certificate: cert_soc_lab_ca
     depends_on: [svc_wireguard_hub, cfg_lab_certificates]
+    core: true
   - graph_id: svc_docker
     host: vps14
     kind: runtime
     name: Docker Engine
     depends_on: [vps14_os]
     persistent: true
+    core_current: true
+    core_reason: current_adguard_container
   - graph_id: app_adguard
     host: vps14
     kind: application
@@ -144,6 +161,8 @@ services:
     depends_on: [svc_docker]
     dns_role: final_forwarder_for_dc02
     container: container_adguard
+    core: true
+    core_reason: final_forwarder_for_dc02
   - graph_id: app_nextcloud
     host: vps14
     kind: application
@@ -175,6 +194,8 @@ services:
     listen: [127.0.0.1:5432, 10.10.10.14:5432]
     databases: [azienda_lab, forgejo, nextcloud, postgres]
     persistent: true
+    core_current: temporary
+    core_reason: dashboard_current_dependency
     secret_refs: [postgres_admin_password, application_database_passwords]
   - graph_id: db_mariadb
     host: vps14
@@ -273,6 +294,9 @@ services:
     listen: [127.0.0.1:5000]
     depends_on: [id_ldap, db_postgresql]
     database: azienda_lab
+    core: true
+    dashboard: true
+    profile_role: CORE_component_not_optional_profile
     secret_refs: [portal_ldap_password, portal_application_secret]
   - graph_id: app_scribble
     host: vps14

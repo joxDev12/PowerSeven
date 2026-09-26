@@ -1,0 +1,12 @@
+[Unit]
+Description=PowerSeven kill switch: stop all optional profiles
+Conflicts=powerseven-profile-nextcloud.service powerseven-profile-forgejo.service powerseven-profile-stirling.service powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-profile all-off start
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=powerseven-core.target

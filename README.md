@@ -130,6 +130,9 @@ Wazuh è centralizzato su VPS14 con Manager, Indexer e Dashboard. VPS12 e DC02 i
 | DNS | [docs/dns.md](docs/dns.md) |
 | Accesso remoto | [docs/remote-access.md](docs/remote-access.md) |
 | Servizi | [docs/services.md](docs/services.md) |
+| Profili VPS14 | [docs/vps14-service-profiles.md](docs/vps14-service-profiles.md) |
+| Ottimizzazione VPS14 | [docs/vps14-optimization.md](docs/vps14-optimization.md) |
+| Cockpit VPS14 | [docs/vps14-cockpit-control.md](docs/vps14-cockpit-control.md) |
 | Docker | [docs/docker.md](docs/docker.md) |
 | Database | [docs/databases.md](docs/databases.md) |
 | Wazuh | [docs/monitoring-wazuh.md](docs/monitoring-wazuh.md) |

@@ -2,12 +2,16 @@
 
 | Interfaccia | Host | Rete | Porta | Stato |
 |---|---|---|---|---|
-| `wg-final` | VPS14 | `10.10.10.0/24` | UDP 51820 | hub attivo |
+| `wg0` | VPS14 Azure corrente | `10.10.10.0/24` | UDP 51820 | hub attivo; unità osservata `wg-quick@wg0.service` |
 | `wg-final` | VPS12 | `10.10.10.12/32` | porta dinamica | handshake osservato |
 | `Lab-Final` | VPS13 | `10.10.10.13/32` | porta dinamica | handshake osservato |
 | client | esterni | `10.10.10.101–107/32` | dinamiche | peer assegnati |
 
-VPS14 inoltra traffico tra peer della stessa rete tramite regola nftables `wg-final`→`wg-final`. Non sono riportati materiali chiave; le configurazioni e le chiavi esistono in `/etc/wireguard` su VPS14 e sono dati sensibili.
+VPS14 inoltra traffico tra peer della stessa rete tramite regola nftables
+`wg0`→`wg0`. Il nome dell'interfaccia locale del rebuild resta da verificare;
+non assumere `wg0` o `wg-final` prima dell'implementazione. Non sono riportati
+materiali chiave; le configurazioni e le chiavi esistono in `/etc/wireguard` su
+VPS14 e sono dati sensibili.
 
 | IP | Assegnatario |
 |---|---|

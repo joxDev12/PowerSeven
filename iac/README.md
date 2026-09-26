@@ -36,6 +36,8 @@ workflow fragile. Potrà essere rivalutato se l'host passerà a vSphere/ESXi.
 - `inventory/storage.yml`: dati persistenti, origine, destinazione e migrazione.
 - `inventory/dependencies.yml`: grafo ridotto delle dipendenze e ordine di
   provisioning.
+- `service-control/`: profili runtime, healthcheck, policy RAM, unità systemd e
+  validatore statico per il boot CORE-only.
 - `versions.yml`: matrice versioni target e decisioni ancora aperte.
 
 ## Struttura target
@@ -58,7 +60,8 @@ VALIDATION              validation/
 ```
 
 Questa passata crea contratti e template. Nessun renderer, playbook o script di
-provisioning viene eseguito automaticamente.
+provisioning viene eseguito automaticamente. `iac/service-control/validate.py`
+è eseguibile localmente e non contatta host remoti.
 
 ## Regole
 

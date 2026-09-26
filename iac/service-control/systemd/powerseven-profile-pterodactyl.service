@@ -1,0 +1,17 @@
+[Unit]
+Description=PowerSeven profile: Pterodactyl control plane
+Requires=powerseven-core.target mariadb.service redis-server.service php8.3-fpm.service pteroq.service wings.service
+After=powerseven-core.target mariadb.service redis-server.service php8.3-fpm.service pteroq.service wings.service powerseven-stop-all-optional.service
+Conflicts=powerseven-profile-nextcloud.service powerseven-profile-forgejo.service powerseven-profile-stirling.service powerseven-profile-wazuh.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-profile pterodactyl start
+ExecStartPost=/usr/local/libexec/powerseven-profile pterodactyl health
+ExecStop=/usr/local/libexec/powerseven-profile pterodactyl stop
+TimeoutStartSec=5min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

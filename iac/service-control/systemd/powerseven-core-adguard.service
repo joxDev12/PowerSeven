@@ -1,0 +1,16 @@
+[Unit]
+Description=PowerSeven CORE AdGuard container
+Requires=docker.service
+After=docker.service
+PartOf=powerseven-core.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker compose --project-directory /opt/soc-adguard -f /opt/soc-adguard/compose.yaml up -d adguard
+ExecStop=/usr/bin/docker compose --project-directory /opt/soc-adguard -f /opt/soc-adguard/compose.yaml stop adguard
+TimeoutStartSec=2min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=powerseven-core.target

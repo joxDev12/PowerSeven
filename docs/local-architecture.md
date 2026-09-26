@@ -9,7 +9,7 @@ dipendenza Azure e nessun dato applicativo precedente.
 |---|---|
 | Hypervisor | VMware Workstation Pro |
 | CPU | Minimo 8 vCPU allocabili al laboratorio; lasciare margine all'host |
-| RAM | Minimo 10 GiB per le VM; profilo raccomandato 11 GiB complessivi |
+| RAM | Minimo 8 GiB con VPS14 3 GiB; profilo raccomandato 10 GiB complessivi |
 | Storage | Minimo 230 GiB thin; profilo raccomandato 320 GiB thin |
 | Storage root | `<VM_STORAGE_ROOT>` configurabile, senza percorsi host hardcoded |
 | Rete | Una rete VMware underlay non sovrapposta alle reti locali esistenti |
@@ -93,26 +93,53 @@ da creare solo nella fase di implementazione.
 | VM | Minimum | Recommended lab profile | Motivo |
 |---|---:|---:|---|
 | VPS13 / DC02 | 2 vCPU, 3 GiB RAM, 60 GiB | 2 vCPU, 3 GiB, 80 GiB | AD DS, DNS, Kerberos, LDAP, RDP |
-| VPS14 / soc-server | 4 vCPU, 5 GiB RAM, 120 GiB | 4 vCPU, 6 GiB, 160 GiB | Docker, Wazuh, DB, Nginx e app |
+| VPS14 / soc-server | 4 vCPU, 3 GiB RAM, 120 GiB | 4 vCPU, 5 GiB, 160 GiB | 3 GiB CORE/profili leggeri; 5 GiB recommended; 6 GiB fallback Wazuh |
 | VPS12 / soc-desktop | 2 vCPU, 2 GiB RAM, 50 GiB | 2 vCPU, 2 GiB, 80 GiB | Ubuntu Desktop, XFCE, XRDP, SSSD |
-| Totale | 8 vCPU, 10 GiB, 230 GiB | 8 vCPU, 11 GiB, 320 GiB | lascia CPU e RAM all'host |
+| Totale | 8 vCPU, 8 GiB, 230 GiB | 8 vCPU, 10 GiB, 320 GiB | lascia CPU e RAM all'host |
 
-Il profilo raccomandato assegna 2+4+5 GiB = 11 GiB alle VM. Verificare sempre
-che l'host disponga di margine sufficiente; se la memoria è stretta, fermare
+Il profilo raccomandato profile-aware assegna 2+3+5 GiB = 10 GiB alle VM. La
+definizione `iac/vmware/vm-definitions.yml` resta conservativa a 6 GiB per VPS14
+e quindi totalizza ancora 11 GiB finché l'acceptance locale non autorizza la
+riduzione. Verificare sempre che l'host disponga di margine sufficiente; se la memoria è stretta, fermare
 `soc-desktop` durante i test pesanti.
+
+### Dimensionamento VPS14 per profilo
+
+La discovery live del 26 settembre 2026 mostra che 6 GiB sono necessari alla
+configurazione Wazuh attuale, non a tutti i profili. Il disegno
+[`vps14-service-profiles.md`](vps14-service-profiles.md) stima 4 GiB come
+target di ottimizzazione non garantito dopo il tuning dell'Indexer e 5 GiB come
+recommended initial VPS14; 3 GiB coprono CORE e profili leggeri. La definizione
+VMware resta conservativa a 6 GiB finché il test locale non prova il margine a
+4/5 GiB.
 
 ## Servizi e confini
 
 - VPS13: nuovo forest/domain `LAB.TEST`, DNS autoritativo, Kerberos, LDAP/LDAPS,
   Global Catalog, Windows Firewall, RDP, OpenSSH, Wazuh Agent.
-- VPS14: WireGuard hub, Docker, database vuoti, AdGuard, Wazuh, Nginx, CA
-  nuova, applicazioni e Pterodactyl. Nessun vecchio volume.
+- VPS14: WireGuard hub, Docker/containerd, database vuoti, AdGuard, Nginx,
+  dashboard azienda-portal e Cockpit socket; Wazuh, applicazioni e Pterodactyl
+  sono profili. PostgreSQL è CORE temporaneo per `azienda_lab`. Nessun vecchio
+  volume.
 - VPS12: Ubuntu Desktop, WireGuard peer, SSSD/Kerberos, XFCE, XRDP, SSH,
   Wazuh Agent.
 
 Regola firewall iniziale: underlay solo tra tre VM e servizi necessari; SSH,
 RDP e XRDP via WireGuard dopo bootstrap; UDP 51820 unico ingresso esterno
 eventualmente pubblicato; backend applicativi su loopback/container network.
+
+## Core e piani di controllo
+
+Nginx e dashboard sono sempre attivi. La dashboard PowerSeven è la GUI
+principale del laboratorio e legge lo stato read-only da `/run/powerseven`.
+Cockpit è la GUI tecnica per systemd/log/diagnostica, non sostituisce la
+dashboard. Systemd orchestra, `powerseven-service` applica la whitelist e
+Compose esegue i runtime.
+
+ALL-OFF-OPTIONAL lascia attivi WireGuard, SSH, Nginx, dashboard, AdGuard,
+Cockpit socket, Docker nell’architettura AdGuard corrente e PostgreSQL finché
+la dashboard usa `azienda_lab`. Una futura dashboard AD/LDAP-primary potrebbe
+rendere PostgreSQL on-demand: non è implementata.
 
 ## Decisione
 

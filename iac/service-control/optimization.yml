@@ -1,0 +1,113 @@
+schema_version: 1
+source: measured_vps14_discovery_2026-09-26
+notes:
+  - cgroup values are current working-set observations; they are not additive host RSS.
+  - profile savings come mainly from not running incompatible stacks together.
+  - no Azure change is implied by this file.
+
+components:
+  wazuh-indexer:
+    current: "RSS 1.68 GiB; cgroup 1.75 GiB; JVM Xms/Xmx 1024 MiB; direct memory 512 MiB"
+    proposed: "WAZUH profile only; validate Xms/Xmx 512 MiB and MaxDirectMemorySize 256 MiB"
+    estimated_ram_saving_gib: 0.6
+    risk: "GC pressure, slower indexing, reduced burst capacity"
+    reversible: true
+    restart_required: true
+  wazuh-dashboard:
+    current: "PSS 209 MiB; cgroup 187 MiB"
+    proposed: "WAZUH profile only; cap Node heap only after UI acceptance"
+    estimated_ram_saving_gib: 0.05
+    risk: "dashboard crash under large searches"
+    reversible: true
+    restart_required: true
+  wazuh-manager:
+    current: "14 processes; manager cgroup 2.31 GiB; PSS 0.95 GiB"
+    proposed: "WAZUH profile only; keep agents disconnected when unused; disable optional collectors only with evidence"
+    estimated_ram_saving_gib: 0.25
+    risk: "loss of inventory/vulnerability telemetry"
+    reversible: true
+    restart_required: true
+  postgresql:
+    current: "cgroup 97 MiB; serves dashboard database azienda_lab plus Forgejo and Nextcloud"
+    proposed: "TEMPORARY CORE while azienda-portal uses azienda_lab; future AD/LDAP migration may make it on-demand; tune only after load test"
+    estimated_ram_saving_gib: 0.0
+    risk: "turning it off breaks the CORE dashboard; future migration could change this"
+    reversible: true
+    restart_required: true
+  mariadb:
+    current: "cgroup 146 MiB; InnoDB buffer pool 128 MiB; max_connections 151"
+    proposed: "On-demand for PTERODACTYL; 64 MiB buffer pool and max_connections 50 for a lab"
+    estimated_ram_saving_gib: 0.06
+    risk: "slower panel queries or connection exhaustion"
+    reversible: true
+    restart_required: true
+  redis:
+    current: "host Redis RSS 13 MiB; used memory 1.13 MiB; no maxmemory"
+    proposed: "On-demand for PTERODACTYL; Nextcloud uses its profile Redis container"
+    estimated_ram_saving_gib: 0.01
+    risk: "queue/cache unavailable outside the profile"
+    reversible: true
+    restart_required: false
+  docker:
+    current: "daemon PSS 183 MiB; cgroup 203 MiB; containerd follows Docker; eight containers live"
+    proposed: "CURRENT option A: keep Docker CORE for the AdGuard container; restart=no and controller-owned optional containers"
+    estimated_ram_saving_gib: 1.35
+    risk: "apps unavailable until their profile starts"
+    reversible: true
+    restart_required: false
+  containerd:
+    current: "Docker dependency; separate RAM not isolated in the discovery snapshot"
+    proposed: "keep with Docker in option A; remeasure as a separate cgroup on the local rebuild"
+    estimated_ram_saving_gib: 0.0
+    risk: "stopping it stops Docker and the CORE AdGuard path"
+    reversible: true
+    restart_required: false
+  adguard-container:
+    current: "126.9 MiB live; 512 MiB limit; eight PIDs; restart=unless-stopped"
+    proposed: "keep as CORE in current option A; change restart policy to no in the local target"
+    estimated_ram_saving_gib: 0.0
+    risk: "DNS failure for DC02 if AdGuard is unavailable"
+    reversible: true
+    restart_required: false
+  adguard-native-future:
+    current: "not implemented; current service is containerized"
+    proposed: "future option B: native AdGuard, Docker may become on-demand if no other CORE consumer remains"
+    estimated_ram_saving_gib: 0.0
+    risk: "migration complexity and DNS outage if fallback is not tested"
+    reversible: true
+    restart_required: true
+  nginx:
+    current: "five processes; cgroup 7 MiB; PSS 8 MiB"
+    proposed: "keep CORE; proxy remains available while optional backends are off"
+    estimated_ram_saving_gib: 0.0
+    risk: "none material; backend responses become unavailable when profile is off"
+    reversible: true
+    restart_required: false
+  gunicorn-portal:
+    current: "one worker; cgroup 45 MiB; PSS 48 MiB"
+    proposed: "CORE dashboard; retain one worker and health check; future AD/LDAP redesign may remove database use"
+    estimated_ram_saving_gib: 0.0
+    risk: "dashboard is unavailable if the CORE service fails"
+    reversible: true
+    restart_required: false
+  pterodactyl-workers:
+    current: "pteroq cgroup 39 MiB; Wings cgroup 24 MiB; two game containers ~53 MiB live"
+    proposed: "PTERODACTYL profile only; start no game server by default"
+    estimated_ram_saving_gib: 0.12
+    risk: "queue/daemon/game servers unavailable outside profile"
+    reversible: true
+    restart_required: false
+  journald:
+    current: "journal disk usage 29.7 MiB"
+    proposed: "cap journal disk usage in the local image; do not trade away logs just for RAM"
+    estimated_ram_saving_gib: 0.0
+    risk: "loss of historical logs if retention is too small"
+    reversible: true
+    restart_required: false
+  ubuntu-services:
+    current: "ModemManager, multipathd, Azure Linux Agent and other image-specific services are enabled"
+    proposed: "omit Azure-only services in the local image; review ModemManager/multipathd before local acceptance"
+    estimated_ram_saving_gib: 0.08
+    risk: "platform integration or storage discovery regression"
+    reversible: true
+    restart_required: true

@@ -1,0 +1,17 @@
+[Unit]
+Description=PowerSeven profile: Nextcloud
+Requires=powerseven-core.target postgresql.service
+After=powerseven-core.target postgresql.service powerseven-stop-all-optional.service
+Conflicts=powerseven-profile-forgejo.service powerseven-profile-stirling.service powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-profile nextcloud start
+ExecStartPost=/usr/local/libexec/powerseven-profile nextcloud health
+ExecStop=/usr/local/libexec/powerseven-profile nextcloud stop
+TimeoutStartSec=5min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

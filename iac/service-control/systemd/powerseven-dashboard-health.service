@@ -1,0 +1,14 @@
+[Unit]
+Description=PowerSeven CORE dashboard health check
+Requires=postgresql.service azienda-portal.service
+After=postgresql.service azienda-portal.service
+PartOf=powerseven-core.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-profile dashboard health
+TimeoutStartSec=30s
+
+[Install]
+WantedBy=powerseven-core.target
