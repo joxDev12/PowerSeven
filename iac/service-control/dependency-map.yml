@@ -33,6 +33,7 @@ applications:
     unit: powerseven-app-stirling.service
     requires: [docker.service]
     container: soc-stirling-stirling-1
+    health: http://127.0.0.1:8084/api/v1/info/status
   SCRIBBLE:
     unit: powerseven-app-scribble.service
     requires: [docker.service]

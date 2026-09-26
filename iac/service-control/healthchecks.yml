@@ -73,6 +73,11 @@ profiles:
       type: docker
       container: soc-stirling-stirling-1
       command: docker inspect --format '{{.State.Health.Status}}' soc-stirling-stirling-1
+    - id: http
+      type: http
+      url: http://127.0.0.1:8084/api/v1/info/status
+      expected_status: 200
+      command: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8084/api/v1/info/status
 
   pterodactyl:
     - id: panel

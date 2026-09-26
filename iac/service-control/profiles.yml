@@ -62,6 +62,14 @@ applications:
     unit: powerseven-app-stirling.service
     autostart: false
     requires: [docker.service]
+    healthchecks: [container-health, http-local]
+    restart_policy: "no"
+    image_version: "2.14.3"
+    ram_baseline_mib: 919.4
+    java_rss_baseline_mib: 870.4
+    controlled_idle_baseline_mib: 768.3
+    jvm_test_idle_mib: 780.7
+    jvm_test_saving_mib: -12.4
   SCRIBBLE:
     unit: powerseven-app-scribble.service
     autostart: false

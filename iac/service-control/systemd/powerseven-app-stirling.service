@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Stirling PDF
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller stirling start
+ExecStop=/usr/local/libexec/powerseven-controller stirling stop
+TimeoutStartSec=240s
+TimeoutStopSec=90s
+
+[Install]
+WantedBy=multi-user.target

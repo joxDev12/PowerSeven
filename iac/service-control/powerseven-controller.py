@@ -23,6 +23,7 @@ FORGEJO = "soc-forgejo-forgejo-1"
 NEXTCLOUD = "soc-cloud-app-1"
 NEXTCLOUD_CRON = "soc-cloud-cron-1"
 NEXTCLOUD_REDIS = "soc-cloud-redis-1"
+STIRLING = "soc-stirling-stirling-1"
 
 FORGEJO_COMPOSE = (
     "docker", "compose", "--project-directory", "/opt/soc-forgejo",
@@ -31,6 +32,10 @@ FORGEJO_COMPOSE = (
 NEXTCLOUD_COMPOSE = (
     "docker", "compose", "--project-directory", "/opt/soc-cloud",
     "-f", "/opt/soc-cloud/compose.yaml",
+)
+STIRLING_COMPOSE = (
+    "docker", "compose", "--project-directory", "/opt/soc-stirling",
+    "-f", "/opt/soc-stirling/compose.yaml",
 )
 
 # Runtime files are a cache. Every transition discovers active applications
@@ -60,7 +65,7 @@ STOPPABLE_DEPENDENCIES = {POSTGRESQL, REDIS}
 APP_CONTAINERS = {
     "forgejo": (FORGEJO,),
     "nextcloud": (NEXTCLOUD,),
-    "stirling": ("soc-stirling-stirling-1",),
+    "stirling": (STIRLING,),
     "scribble": (
         "8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5",
         "548ab28c-0e73-4706-a894-959a2d1b76a1",
@@ -159,6 +164,20 @@ def nextcloud_http_ready() -> bool:
     ).returncode == 0
 
 
+def stirling_health() -> bool:
+    if not container_running(STIRLING):
+        return False
+    health = command(
+        ["docker", "inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}", STIRLING],
+        check=False,
+    ).stdout.strip()
+    return health == "healthy" and command(
+        ["curl", "--fail", "--silent", "--show-error", "--max-time", "5",
+         "http://127.0.0.1:8084/api/v1/info/status"],
+        check=False,
+    ).returncode == 0
+
+
 def forgejo_health() -> bool:
     if not container_running(FORGEJO):
         return False
@@ -183,6 +202,8 @@ def health_snapshot(active: set[str]) -> dict[str, str]:
     if "nextcloud" in active:
         health["nextcloud"] = "PASS" if nextcloud_http_ready() else "FAIL"
         health["nextcloud-cron"] = "PASS" if container_running(NEXTCLOUD_CRON) else "FAIL"
+    if "stirling" in active:
+        health["stirling"] = "PASS" if stirling_health() else "FAIL"
     return health
 
 
@@ -279,6 +300,10 @@ def wait_for_nextcloud() -> None:
     wait_until(lambda: container_running(NEXTCLOUD) and nextcloud_http_ready(), "Nextcloud health", 120)
 
 
+def wait_for_stirling() -> None:
+    wait_until(stirling_health, "Stirling health", 180)
+
+
 def start_forgejo() -> None:
     reconcile(active_applications() | {"forgejo"})
     if not container_running(FORGEJO):
@@ -314,6 +339,21 @@ def stop_nextcloud() -> None:
     save_state(health=blocked or "PASS", failure=blocked)
 
 
+def start_stirling() -> None:
+    reconcile(active_applications() | {"stirling"})
+    if not container_running(STIRLING):
+        command([*STIRLING_COMPOSE, "up", "-d", "--no-deps", "stirling"], timeout=120)
+    wait_for_stirling()
+    save_state()
+
+
+def stop_stirling() -> None:
+    if container_running(STIRLING):
+        command([*STIRLING_COMPOSE, "stop", "stirling"], timeout=90)
+    blocked = reconcile(active_applications())
+    save_state(health=blocked or "PASS", failure=blocked)
+
+
 def discover_actual_state() -> dict[str, object]:
     active = active_applications()
     required = desired_dependencies(active)
@@ -342,6 +382,7 @@ def self_check() -> int:
     assert desired_dependencies({"forgejo"}) == {"docker.service", POSTGRESQL}
     assert desired_dependencies({"nextcloud"}) == {"docker.service", POSTGRESQL, REDIS}
     assert desired_dependencies({"forgejo", "nextcloud"}) == {"docker.service", POSTGRESQL, REDIS}
+    assert desired_dependencies({"stirling"}) == {"docker.service"}
     assert unit_for(POSTGRESQL) == POSTGRESQL_UNIT
     assert POSTGRESQL_UNIT in MANAGED_SERVICES
     assert "docker.service" not in STOPPABLE_DEPENDENCIES
@@ -357,15 +398,17 @@ def main(argv: list[str]) -> int:
         return status()
     if argv == ["reconcile"]:
         action = reconcile_command
-    elif argv in (["forgejo", "start"], ["forgejo", "stop"], ["nextcloud", "start"], ["nextcloud", "stop"]):
+    elif argv in (["forgejo", "start"], ["forgejo", "stop"], ["nextcloud", "start"], ["nextcloud", "stop"], ["stirling", "start"], ["stirling", "stop"]):
         action = {
             ("forgejo", "start"): start_forgejo,
             ("forgejo", "stop"): stop_forgejo,
             ("nextcloud", "start"): start_nextcloud,
             ("nextcloud", "stop"): stop_nextcloud,
+            ("stirling", "start"): start_stirling,
+            ("stirling", "stop"): stop_stirling,
         }[(argv[0], argv[1])]
     else:
-        print("usage: powerseven-controller {forgejo|nextcloud} {start|stop} | status | reconcile | self-check", file=sys.stderr)
+        print("usage: powerseven-controller {forgejo|nextcloud|stirling} {start|stop} | status | reconcile | self-check", file=sys.stderr)
         return 2
 
     LOCK_PATH.parent.mkdir(mode=0o755, parents=True, exist_ok=True)

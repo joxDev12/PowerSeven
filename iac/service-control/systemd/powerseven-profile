@@ -41,7 +41,6 @@ health() {
         core) systemctl is-active --quiet docker.service && systemctl is-active --quiet nginx.service && systemctl is-active --quiet azienda-portal.service && curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null ;;
         nextcloud) curl --fail --silent --show-error http://127.0.0.1:8083/status.php >/dev/null ;;
         forgejo) curl --fail --silent --show-error http://127.0.0.1:3001/ >/dev/null ;;
-        stirling) test "$(/usr/bin/docker inspect --format '{{with (index .State "Health")}}{{.Status}}{{end}}' soc-stirling-stirling-1)" = healthy ;;
         pterodactyl) systemctl is-active --quiet mariadb.service && curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/ | grep -Eq '^(200|401)$' ;;
         wazuh) systemctl is-active --quiet wazuh-indexer.service && systemctl is-active --quiet wazuh-manager.service && curl --fail --silent --insecure https://127.0.0.1:8443/ >/dev/null ;;
         dashboard) curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null ;;
@@ -54,7 +53,6 @@ health() {
 stop_optional() {
     compose soc-cloud stop cron app redis || true
     compose soc-forgejo stop forgejo || true
-    compose soc-stirling stop stirling || true
     if [ -f /opt/powerseven/compose.yaml ]; then
         /usr/bin/docker compose --project-directory /opt/powerseven -f /opt/powerseven/compose.yaml stop scribble-1 scribble-2 || true
     fi
@@ -66,7 +64,6 @@ stop_profile() {
     case "$1" in
         nextcloud) compose soc-cloud stop cron app redis ;;
         forgejo) compose soc-forgejo stop forgejo ;;
-        stirling) compose soc-stirling stop stirling ;;
         pterodactyl)
             /usr/bin/docker ps --filter label=Service=Pterodactyl -q | xargs -r /usr/bin/docker stop
             /usr/bin/systemctl stop wings.service pteroq.service php8.3-fpm.service redis-server.service mariadb.service || true
@@ -89,8 +86,6 @@ run_action() {
         nextcloud:stop) stop_profile nextcloud ;;
         forgejo:start) compose soc-forgejo up -d forgejo ;;
         forgejo:stop) stop_profile forgejo ;;
-        stirling:start) compose soc-stirling up -d stirling ;;
-        stirling:stop) stop_profile stirling ;;
         pterodactyl:start) : ;;
         pterodactyl:stop) stop_profile pterodactyl ;;
         wazuh:start) : ;;

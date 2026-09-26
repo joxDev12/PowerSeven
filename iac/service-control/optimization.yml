@@ -48,6 +48,13 @@ components:
     risk: "lower connection ceiling can queue bursts; healthcheck adds bounded startup gating"
     reversible: true
     restart_required: true
+  stirling:
+    current: "image 2.14.3; restart=unless-stopped; cgroup 919.4 MiB and Java RSS 870.4 MiB in discovery; 35 Java threads; one LibreOffice UNO session; OCR init excluded"
+    proposed: 'restart="no"; controller-owned service-level lifecycle; retain balanced G1, dynamic heap policy, one UNO session, essential PDF conversions and current optional-feature settings'
+    estimated_ram_saving_gib: 0.0
+    risk: "JVM InitialRAM 10%/MaxRAM 55% test produced 780.7 MiB versus 768.3 MiB controlled baseline, so it was reverted; LibreOffice lazy loading was not applied because the current config has no endpoint and would disable essential conversions"
+    reversible: true
+    restart_required: true
   mariadb:
     current: "cgroup 146 MiB; InnoDB buffer pool 128 MiB; max_connections 151"
     proposed: "On-demand for PTERODACTYL; 64 MiB buffer pool and max_connections 50 for a lab"

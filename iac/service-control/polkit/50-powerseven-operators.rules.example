@@ -5,7 +5,7 @@ polkit.addRule(function(action, subject) {
     var allowed = [
         "powerseven-app-nextcloud.service",
         "powerseven-app-forgejo.service",
-        "powerseven-profile-stirling.service",
+        "powerseven-app-stirling.service",
         "powerseven-profile-pterodactyl.service",
         "powerseven-profile-wazuh.service",
         "powerseven-profile-scribble.service",

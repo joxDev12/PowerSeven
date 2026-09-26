@@ -102,6 +102,13 @@ def main() -> int:
         fail("Nextcloud healthchecks must use the concrete PostgreSQL cluster")
     if not any(check.get("container") == "soc-cloud-redis-1" for check in nextcloud_checks):
         fail("Nextcloud Redis healthcheck is missing")
+    stirling_checks = healthchecks.get("profiles", {}).get("stirling", [])
+    if apps.get("STIRLING", {}).get("requires") != ["docker.service"]:
+        fail("Stirling must require Docker only")
+    if not any(check.get("container") == "soc-stirling-stirling-1" for check in stirling_checks):
+        fail("Stirling container healthcheck is missing")
+    if not any(check.get("url") == "http://127.0.0.1:8084/api/v1/info/status" for check in stirling_checks):
+        fail("Stirling HTTP healthcheck is missing")
 
     components = optimization.get("components", {})
     if "forgejo" not in components or "postgresql" not in components:
@@ -113,6 +120,7 @@ def main() -> int:
     required = {
         "powerseven-core.target", "powerseven-dashboard-health.service",
         "powerseven-app-forgejo.service", "powerseven-app-nextcloud.service",
+        "powerseven-app-stirling.service",
     }
     names = {path.name for path in systemd.iterdir()}
     if not required <= names:
@@ -121,6 +129,8 @@ def main() -> int:
         fail("legacy Forgejo profile unit must not remain")
     if "powerseven-profile-nextcloud.service" in names:
         fail("legacy Nextcloud profile unit must not remain")
+    if "powerseven-profile-stirling.service" in names:
+        fail("legacy Stirling profile unit must not remain")
     core_unit = (systemd / "powerseven-core.target").read_text(encoding="utf-8")
     dashboard_unit = (systemd / "powerseven-dashboard-health.service").read_text(encoding="utf-8")
     if "postgresql.service" in core_unit or "postgresql.service" in dashboard_unit:
@@ -138,6 +148,8 @@ def main() -> int:
         fail("controller lacks shared Redis or uses compose down")
     if "fcntl.flock" not in controller or "desired_dependencies" not in controller or "discover_actual_state" not in controller:
         fail("controller lacks lock, desired-state union, or actual-state discovery")
+    if "stirling_health" not in controller or "start_stirling" not in controller or "stop_stirling" not in controller:
+        fail("controller lacks Stirling lifecycle and health handling")
     if "postgresql.service" in controller:
         fail("controller contains ambiguous PostgreSQL aggregator reference")
 

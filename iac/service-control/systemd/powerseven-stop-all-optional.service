@@ -1,6 +1,6 @@
 [Unit]
 Description=PowerSeven kill switch: stop all optional profiles
-Conflicts=powerseven-profile-stirling.service powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service
+Conflicts=powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service
 
 [Service]
 Type=oneshot
