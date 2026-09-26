@@ -2,6 +2,14 @@ schema_version: 2
 scope: target_local_vmware
 source: measured_vps14_discovery_2026-09-26
 
+target:
+  vcpu: 4
+  memory_gib_initial: 5
+  thin_disk_gib: 120
+  status: recommended_initial_target_requires_local_validation
+  experimental_memory_gib: 4
+  fallback_memory_gib: 6
+
 boot:
   default_profile: CORE
   core_profile: CORE
@@ -117,10 +125,16 @@ applications:
     native_units: [wazuh-indexer.service, wazuh-manager.service, filebeat.service, wazuh-dashboard.service]
     native_units_enabled_at_boot: false
     agent_count_baseline: 2
-    ram_baseline_cgroup_mib: 4453.4
-    indexer_heap_mib: [1024, 1024]
-    indexer_direct_memory_mib: 512
-    tuning_applied: false
+    startup_seconds_observed: [30, 40]
+    manager_cgroup_mib_observed: [400, 450]
+    indexer_cgroup_mib_observed: [950, 1050]
+    dashboard_filebeat_cgroup_mib_observed: 180
+    ram_tuned_stabilized_mib: [1536, 1638]
+    host_used_with_wazuh_on_gib_observed: [2.6, 2.7]
+    indexer_heap_mib: [512, 512]
+    indexer_direct_memory_mib: 256
+    tuning_applied: true
+    tuning_source_of_truth: ../ansible/roles/wazuh_server/defaults/main.yml
 
 resource_baseline:
   forgejo_container_mib: 193.2

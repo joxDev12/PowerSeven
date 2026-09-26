@@ -1,0 +1,42 @@
+---
+- name: Check Wazuh Indexer JVM configuration files
+  become: true
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ wazuh_indexer_jvm_options_path }}"
+    - "{{ wazuh_indexer_defaults_path }}"
+  register: wazuh_indexer_config_files
+
+- name: Require packaged Wazuh Indexer configuration
+  become: true
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: "Wazuh Indexer package configuration is missing: {{ item.item }}"
+  loop: "{{ wazuh_indexer_config_files.results }}"
+
+- name: Set validated Wazuh Indexer initial heap
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ wazuh_indexer_jvm_options_path }}"
+    regexp: '^-Xms[0-9]+[mMgG]$'
+    line: "-Xms{{ wazuh_indexer_heap_xms }}"
+    backup: true
+
+- name: Set validated Wazuh Indexer maximum heap
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ wazuh_indexer_jvm_options_path }}"
+    regexp: '^-Xmx[0-9]+[mMgG]$'
+    line: "-Xmx{{ wazuh_indexer_heap_xmx }}"
+    backup: true
+
+- name: Set validated Wazuh Indexer direct memory
+  become: true
+  ansible.builtin.lineinfile:
+    path: "{{ wazuh_indexer_defaults_path }}"
+    regexp: '^#?OPENSEARCH_JAVA_OPTS='
+    line: 'OPENSEARCH_JAVA_OPTS="-XX:MaxDirectMemorySize={{ wazuh_indexer_max_direct_memory }}"'
+    backup: true

@@ -1,5 +1,7 @@
 schema_version: 1
-source: measured_vps14_discovery_2026-09-26
+source: measured_vps14_discovery_and_wazuh_validation_2026-09-26
+source_of_truth:
+  wazuh_indexer_tuning: iac/ansible/roles/wazuh_server/defaults/main.yml
 notes:
   - cgroup values are current working-set observations; they are not additive host RSS.
   - profile savings come mainly from not running incompatible stacks together.
@@ -7,12 +9,13 @@ notes:
 
 components:
   wazuh-indexer:
-    current: "RSS 1.69 GiB; cgroup 1.78 GiB; JVM Xms/Xmx 1024 MiB; direct memory 512 MiB"
-    proposed: "WAZUH profile only; validate Xms/Xmx 512 MiB and MaxDirectMemorySize 256 MiB"
-    estimated_ram_saving_gib: 0.6
+    current: "Validated live: cgroup ~0.95–1.05 GiB; Xms/Xmx 512 MiB; direct memory 256 MiB"
+    proposed: "Provision the validated profile through the wazuh_server role defaults; no additional Indexer tuning"
+    estimated_ram_saving_gib: 0.8
     risk: "GC pressure, slower indexing, reduced burst capacity"
     reversible: true
     restart_required: true
+    validation: "PASS: two startups, active agents, stable indexing observation, no OOM or restart"
   wazuh-dashboard:
     current: "process RSS 212 MiB; cgroup 188 MiB"
     proposed: "WAZUH profile only; cap Node heap only after UI acceptance"
@@ -21,9 +24,9 @@ components:
     reversible: true
     restart_required: true
   wazuh-manager:
-    current: "14 processes; manager cgroup 2.36 GiB; major process RSS modulesd 520 MiB, API tree ~395 MiB"
-    proposed: "WAZUH profile only; keep agents disconnected when unused; disable optional collectors only with evidence"
-    estimated_ram_saving_gib: 0.25
+    current: "Validated live: cgroup ~0.40–0.45 GiB after restart; historical 2.36 GiB observation remains unexplained"
+    proposed: "Keep Manager stock; characterize optional modules before any tuning"
+    estimated_ram_saving_gib: 0.0
     risk: "loss of inventory/vulnerability telemetry"
     reversible: true
     restart_required: true

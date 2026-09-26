@@ -56,3 +56,16 @@ and exits once; an unknown PostgreSQL client produces
 The current Azure host uses `wg-quick@wg0.service`. The future local interface
 name remains a provisioning decision; render the profile units only after the
 real local WireGuard unit is verified.
+
+Wazuh is optional and normally OFF. Its controller order is:
+
+```text
+START: Indexer -> Manager -> Filebeat -> Dashboard
+STOP:  Dashboard -> Filebeat -> Manager -> Indexer
+```
+
+The validated Indexer JVM profile is provisioned by the Ansible role
+`iac/ansible/roles/wazuh_server/`; its defaults are the single source of truth
+for `Xms=512m`, `Xmx=512m` and
+`MaxDirectMemorySize=256m`. `profiles.yml` and `optimization.yml` document the
+resulting profile and validation status only.

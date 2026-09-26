@@ -289,6 +289,11 @@ overlay autorizzati.
 **Azioni:** installare Manager, Indexer, Dashboard con credenziali nuove;
 configurare cert nuovi; pubblicare Dashboard via Nginx.
 
+Il role `iac/ansible/roles/wazuh_server` applica inoltre il profilo Indexer
+validato: `Xms=512m`, `Xmx=512m` e
+`MaxDirectMemorySize=256m`. Manager, Filebeat, Dashboard, G1GC e
+`AlwaysPreTouch` restano stock.
+
 **Configurazione attesa:** indici vuoti, Manager su 1514/1515, API 55000.
 
 **Test:** Dashboard, enrollment, evento test.

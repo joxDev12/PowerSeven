@@ -1,5 +1,5 @@
 # Role contracts
 
-Ogni directory role descrive input, prerequisiti, output e dipendenze. Le
-directory non contengono ancora task: questa passata prepara le interfacce e
-mantiene il dry-run privo di effetti.
+Ogni directory role descrive input, prerequisiti, output e dipendenze. I role
+restano contratti finché non contengono task; `wazuh_server` include inoltre
+il task idempotente per il profilo JVM Indexer già validato live.

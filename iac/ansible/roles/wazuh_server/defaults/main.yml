@@ -1,0 +1,10 @@
+---
+# Wazuh Indexer JVM values validated on the Azure VPS14 live stack.
+# These variables are the provisioning source of truth.  The service-control
+# profiles report the resulting resource envelope but do not configure it.
+wazuh_indexer_heap_xms: "512m"
+wazuh_indexer_heap_xmx: "512m"
+wazuh_indexer_max_direct_memory: "256m"
+
+wazuh_indexer_jvm_options_path: /etc/wazuh-indexer/jvm.options
+wazuh_indexer_defaults_path: /etc/default/wazuh-indexer

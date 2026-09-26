@@ -54,6 +54,9 @@ def main() -> int:
     optimization = load(ROOT / "optimization.yml")
     compose = load(ROOT / "../docker/compose.yml")
 
+    wazuh_role = ROOT.parent / "ansible" / "roles" / "wazuh_server"
+    wazuh_defaults = load(wazuh_role / "defaults" / "main.yml")
+
     protected = set(profiles.get("boot", {}).get("protected_units", []))
     expected_core = {
         "wg-quick@wg0.service", "ssh.socket", "docker.service", "nginx.service",
@@ -68,6 +71,21 @@ def main() -> int:
         fail("architecture must declare PostgreSQL non-CORE")
     if profiles.get("architecture", {}).get("dashboard", {}).get("postgres_dependency") != "none":
         fail("dashboard must have no PostgreSQL dependency")
+
+    if wazuh_defaults.get("wazuh_indexer_heap_xms") != "512m":
+        fail("Wazuh Indexer IaC Xms must be 512m")
+    if wazuh_defaults.get("wazuh_indexer_heap_xmx") != "512m":
+        fail("Wazuh Indexer IaC Xmx must be 512m")
+    if wazuh_defaults.get("wazuh_indexer_max_direct_memory") != "256m":
+        fail("Wazuh Indexer IaC direct memory must be 256m")
+    wazuh_tasks = wazuh_role / "tasks" / "main.yml"
+    if not wazuh_tasks.exists():
+        fail("Wazuh server role must provision the Indexer JVM values")
+    else:
+        task_text = wazuh_tasks.read_text(encoding="utf-8")
+        for token in ("lineinfile", "wazuh_indexer_jvm_options_path", "wazuh_indexer_defaults_path"):
+            if token not in task_text:
+                fail(f"Wazuh server role is missing Indexer provisioning token: {token}")
 
     app_names = {"FORGEJO", "NEXTCLOUD", "STIRLING", "SCRIBBLE", "PTERODACTYL_PANEL", "PTERODACTYL_WINGS", "WAZUH"}
     apps = dependencies.get("applications", {})
@@ -154,6 +172,13 @@ def main() -> int:
         fail("Wazuh profile dependency declaration is incorrect")
     if profiles.get("applications", {}).get("WAZUH", {}).get("native_units_enabled_at_boot") is not False:
         fail("Wazuh native units must be disabled at boot")
+    wazuh_profile = profiles.get("applications", {}).get("WAZUH", {})
+    if wazuh_profile.get("indexer_heap_mib") != [512, 512]:
+        fail("Wazuh profile must document the validated 512/512 heap")
+    if wazuh_profile.get("indexer_direct_memory_mib") != 256:
+        fail("Wazuh profile must document the validated 256 MiB direct memory")
+    if wazuh_profile.get("tuning_applied") is not True:
+        fail("Wazuh profile must mark the validated Indexer tuning as applied")
     if {check.get("unit") for check in wazuh_checks if check.get("unit")} < set(wazuh_requires):
         fail("Wazuh systemd healthchecks are incomplete")
     if not {check.get("id") for check in wazuh_checks} >= {

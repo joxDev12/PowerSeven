@@ -1,8 +1,9 @@
 # VPS14 service profiles
 
-Discovery read-only eseguita il 26 settembre 2026 via SSH su
-`serveradmin@10.10.10.14`, usando solo l'indirizzo VPN. Non sono stati
-eseguiti installazioni, start/stop/restart, cambi firewall, Azure o WireGuard.
+Discovery iniziale e validazione controllata eseguite il 26 settembre 2026 via
+SSH su `serveradmin@10.10.10.14`, usando solo l'indirizzo VPN. Le prove Wazuh
+successive hanno riguardato esclusivamente lifecycle controller e tuning
+Indexer; non sono stati modificati Manager, firewall, Azure o WireGuard.
 
 ## Evidenze live
 
@@ -15,15 +16,15 @@ di processo/cgroup sotto sono più utili per dimensionare i profili.
 
 | Processo | RSS | PSS | Nota |
 |---|---:|---:|---|
-| Wazuh Indexer Java | 1,727 MiB | 1,723 MiB | heap 1 GiB, direct 512 MiB |
+| Wazuh Indexer Java | 1,727 MiB | 1,723 MiB | historical pre-tuning observation; heap 1 GiB, direct 512 MiB |
 | Stirling Java | 870 MiB | 868 MiB | include conversione PDF |
-| `wazuh-modulesd` | 515 MiB | 505 MiB | Manager |
+| `wazuh-modulesd` | 515 MiB | 505 MiB | historical observation / unexplained long-running measurement; non baseline corrente |
 | Wazuh Dashboard Node | 212 MiB | 209 MiB | ascolto live `0.0.0.0:8443` |
 | Forgejo | 180 MiB | 180 MiB | container |
 | AdGuard Home | 153 MiB | 153 MiB | container |
 | Docker daemon | 147 MiB | 144 MiB | cgroup Docker 203 MiB |
 | MariaDB | 139 MiB | 133 MiB | InnoDB pool 128 MiB |
-| Wazuh API Python | 133 MiB | 114 MiB | cgroup Manager |
+| Wazuh API Python | 133 MiB | 114 MiB | historical observation |
 | Apache2 | 124 MiB | 32 MiB | Nextcloud container, pagine condivise |
 | `wazuh-analysisd` | 120 MiB | 117 MiB | Manager |
 | Apache2 | 119 MiB | 29 MiB | Nextcloud container |
@@ -52,7 +53,7 @@ e sono gestiti dalle unità PowerSeven.
 
 | Unità | Cgroup | PSS/processi |
 |---|---:|---:|
-| `wazuh-manager.service` | 2,366 MiB | 970 MiB / 14 |
+| `wazuh-manager.service` | 2,366 MiB | 970 MiB / 14; historical observation / unexplained long-running measurement |
 | `wazuh-indexer.service` | 1,793 MiB | 1,723 MiB / 1 |
 | `wazuh-dashboard.service` | 187 MiB | 209 MiB / 1 |
 | `docker.service` | 203 MiB | 183 MiB / 11 |
@@ -68,18 +69,36 @@ Wazuh Manager cgroup include API, database, analysisd, remoted, authd,
 modulesd e gli altri processi Wazuh; per questo la somma dei singoli RSS non
 va sommata due volte al cgroup.
 
+### Wazuh tuned validation
+
+La misura fresh-start stabilizzata con Wazuh on-demand e Indexer JVM
+`Xms=512m`, `Xmx=512m`, `MaxDirectMemorySize=256m` ha riportato:
+
+| Componente | cgroup stabilizzato |
+|---|---:|
+| Manager | ~400–450 MiB |
+| Indexer | ~0.95–1.05 GiB |
+| Dashboard + Filebeat | ~180 MiB |
+| Totale Wazuh | ~1.5–1.6 GiB |
+| Host Azure 15 GiB con Wazuh ON | ~2.6–2.7 GiB used |
+
+Il valore Manager di 2.36 GiB resta conservato solo come osservazione storica
+non spiegata e non rappresenta la baseline prevista del profilo.
+
 ## Autostart audit
 
-Servizi applicativi o pesanti attivi e abilitati al boot oggi:
+Servizi applicativi o pesanti osservati nell'immagine Azure; Wazuh è ora
+controller-owned e disabilitato al boot:
 
 ```text
 docker containerd nginx
 postgresql.service (aggregator) / postgresql@18-main.service (cluster lifecycle)
 mariadb redis-server php8.3-fpm
 azienda-portal pteroq wings
-filebeat
-wazuh-indexer wazuh-manager wazuh-dashboard
 ```
+
+`powerseven-app-wazuh.service` e le unità native Wazuh sono `disabled`;
+Wazuh normalmente resta OFF e viene avviato solo dal controller.
 
 WireGuard reale è `wg-quick@wg0.service`, attivo e abilitato. L'unità
 `wg-quick@wg-final.service` non è quella usata dalla VPS14 osservata. SSH è
@@ -128,14 +147,15 @@ mantiene attivo finché Forgejo o Nextcloud risultano applicazioni attive.
 | FORGEJO | PostgreSQL; Forgejo `soc-forgejo` | CORE → PostgreSQL → Forgejo | Forgejo | 3001 locale, 443 | HTTP 200 | 2.3 GiB |
 | STIRLING | Stirling PDF | CORE → container | Stirling | 8084 locale, 443 | Docker healthy/HTTP | 3.2 GiB |
 | PTERODACTYL | MariaDB, Redis, PHP-FPM, pteroq, Wings | CORE → DB/cache → PHP → queue → Wings | Wings → queue → PHP → cache → DB | 8080 locale, 2022, 443 | DB/panel/Wings | 1.8 GiB control plane; 4 GiB con un server da 2 GiB |
-| WAZUH | Indexer, Filebeat, Manager, Dashboard | CORE → Indexer → Filebeat/Manager → Dashboard | Dashboard → Manager → Filebeat → Indexer | 1514, 1515, 55000, 443 | unità/API/UI | 5.0 GiB target; 4 GiB sperimentale |
+| WAZUH | Indexer, Filebeat, Manager, Dashboard | CORE → Indexer → Manager → Filebeat → Dashboard | Dashboard → Filebeat → Manager → Indexer | 1514, 1515, 55000, 443 | unità/API/UI | ~1.5–1.6 GiB tuned; 5 GiB target iniziale da validare |
 | PORTAL | componente CORE: Gunicorn 1 worker, dashboard health, AD bind | CORE → portal → health | mai tramite profilo optional | 5000 locale, 443 | HTTP 200 sempre disponibile | incluso in CORE |
 | SCRIBBLE | due Pterodactyl `server_process` | CORE → Wings → Wings local API → scribble-1/2 | 2 → 1 | 8081/8082 locali, 443 | Wings API + HTTP 200 su 8081/8082 | 1.8 GiB |
 | ALL-OFF-OPTIONAL | nessun optional | CORE → stop controller | tutti gli optional | solo CORE | CORE + dashboard HTTP 200 | 2.0 GiB peak |
 
 Le stime sono planning envelope, non somma cieca degli RSS. Si basano sui
-cgroup live, sui limiti Compose e su un margine OS; il profilo Wazuh richiede
-validazione locale dopo la riduzione heap. Pterodactyl esclude il carico reale
+cgroup live, sui limiti Compose e su un margine OS. Il tuning Indexer Wazuh è
+validato su Azure, ma il profilo richiede ancora validazione sulla VM locale.
+Pterodactyl esclude il carico reale
 dei game server: due container live dichiarano `SERVER_MEMORY=2048` ciascuno.
 
 `PORTAL` resta nel catalogo solo per compatibilità dell’inventory: è un
@@ -174,11 +194,12 @@ La dichiarazione e i template sono in
 | VPS14 locale | Profili plausibili |
 |---:|---|
 | 3 GiB | CORE e profili leggeri; Nextcloud/Forgejo/Stirling solo con margine ridotto; Wazuh e game workload esclusi |
-| 4 GiB | optimization target da validare; profili leggeri e Wazuh solo dopo load test, non garantito |
-| 5 GiB | recommended initial VPS14; un profilo alla volta, Wazuh tuned o un game server ~2 GiB da validare |
-| 6 GiB | fallback per Wazuh attuale non ottimizzato o due game server ~2 GiB |
+| 4 GiB | target sperimentale successivo; Wazuh richiede ulteriore test e margine non garantito |
+| 5 GiB | target iniziale raccomandato; Wazuh tuned da validare sulla VM locale |
+| 6 GiB | fallback se i test reali mostrano pressione memoria |
 
-Conclusione: 6 GiB non è un requisito architetturale. Il minimo pratico locale
-è 3 GiB per CORE/profili leggeri; il target di ottimizzazione è 4 GiB, senza
-garanzia Wazuh; 5 GiB è la raccomandazione iniziale. Heap Indexer 512m/direct
-256m resta EXPERIMENTAL e REQUIRES LOAD TEST; non è stato applicato su Azure.
+Il target VPS14 locale è 4 vCPU, 5 GiB RAM iniziali e 120 GiB thin disk.
+5 GiB è il target iniziale raccomandato ma deve ancora essere validato sulla
+VM locale; 4 GiB è un esperimento successivo e 6 GiB è il fallback in caso di
+pressione. Il profilo Indexer 512m/direct 256m è stato validato su Azure, ma
+la sufficienza della VM locale non è ancora dichiarata.
