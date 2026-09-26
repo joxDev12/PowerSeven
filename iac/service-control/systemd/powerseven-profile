@@ -38,13 +38,13 @@ compose() {
 
 health() {
     case "$1" in
-        core) systemctl is-active --quiet docker.service && systemctl is-active --quiet nginx.service && systemctl is-active --quiet postgresql.service && systemctl is-active --quiet azienda-portal.service && curl --fail --silent --show-error http://127.0.0.1:5000/ >/dev/null ;;
+        core) systemctl is-active --quiet docker.service && systemctl is-active --quiet nginx.service && systemctl is-active --quiet azienda-portal.service && curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null ;;
         nextcloud) curl --fail --silent --show-error http://127.0.0.1:8083/status.php >/dev/null ;;
         forgejo) curl --fail --silent --show-error http://127.0.0.1:3001/ >/dev/null ;;
         stirling) test "$(/usr/bin/docker inspect --format '{{with (index .State "Health")}}{{.Status}}{{end}}' soc-stirling-stirling-1)" = healthy ;;
         pterodactyl) systemctl is-active --quiet mariadb.service && curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/ | grep -Eq '^(200|401)$' ;;
         wazuh) systemctl is-active --quiet wazuh-indexer.service && systemctl is-active --quiet wazuh-manager.service && curl --fail --silent --insecure https://127.0.0.1:8443/ >/dev/null ;;
-        dashboard) curl --fail --silent --show-error http://127.0.0.1:5000/ >/dev/null ;;
+        dashboard) curl --fail --silent --show-error http://127.0.0.1:5000/health >/dev/null ;;
         scribble) timeout 3 bash -c '</dev/tcp/127.0.0.1/8081' && timeout 3 bash -c '</dev/tcp/127.0.0.1/8082' ;;
         all-off) health core ;;
         *) return 2 ;;

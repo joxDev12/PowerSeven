@@ -28,10 +28,24 @@ components:
     reversible: true
     restart_required: true
   postgresql:
-    current: "cgroup 97 MiB; serves dashboard database azienda_lab plus Forgejo and Nextcloud"
-    proposed: "TEMPORARY CORE while azienda-portal uses azienda_lab; future AD/LDAP migration may make it on-demand; tune only after load test"
+    current: "cluster postgresql@18-main.service; cgroup 47.7 MiB baseline; Forgejo and Nextcloud are declared consumers"
+    proposed: "manage the concrete cluster unit from the desired application union; stop only when no consumer or external client remains"
     estimated_ram_saving_gib: 0.0
-    risk: "turning it off breaks the CORE dashboard; future migration could change this"
+    risk: "stopping it while Forgejo or Nextcloud is active breaks the application"
+    reversible: true
+    restart_required: false
+  nextcloud:
+    current: "discovery app 177 MiB; cron 1.6 MiB; Redis 9.1 MiB; limits 2 GiB/512 MiB/256 MiB; restart=unless-stopped"
+    proposed: "restart=\"no\" for app/cron/Redis; retain limits, APCu, Redis locking/cache, cron and logging"
+    estimated_ram_saving_gib: 0.0
+    risk: "controller becomes the lifecycle owner; no application feature is disabled"
+    reversible: true
+    restart_required: true
+  forgejo:
+    current: "container 193.2 MiB; PostgreSQL pool defaults; restart=unless-stopped; no Docker healthcheck"
+    proposed: "restart=\"no\"; MAX_OPEN_CONNS=20; MAX_IDLE_CONNS=2; CONN_MAX_IDLETIME=10m; bounded HTTP Docker healthcheck"
+    estimated_ram_saving_gib: 0.0
+    risk: "lower connection ceiling can queue bursts; healthcheck adds bounded startup gating"
     reversible: true
     restart_required: true
   mariadb:

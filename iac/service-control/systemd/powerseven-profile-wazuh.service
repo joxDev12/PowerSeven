@@ -2,7 +2,7 @@
 Description=PowerSeven profile: Wazuh
 Requires=powerseven-core.target filebeat.service wazuh-indexer.service wazuh-manager.service wazuh-dashboard.service
 After=powerseven-core.target wazuh-indexer.service filebeat.service wazuh-manager.service wazuh-dashboard.service powerseven-stop-all-optional.service
-Conflicts=powerseven-profile-nextcloud.service powerseven-profile-forgejo.service powerseven-profile-stirling.service powerseven-profile-pterodactyl.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
+Conflicts=powerseven-profile-stirling.service powerseven-profile-pterodactyl.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
 
 [Service]
 Type=oneshot

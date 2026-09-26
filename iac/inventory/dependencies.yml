@@ -7,17 +7,19 @@ scope:
 
 service_control:
   declaration: ../service-control/profiles.yml
-  boot_profile: ALL-OFF-OPTIONAL
+  boot_profile: CORE
   core_profile: CORE
+  postgresql_lifecycle_unit: postgresql@18-main.service
+  postgresql_aggregator_unit: postgresql.service
   optional_profiles: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH, SCRIBBLE]
   core_components: [WIREGUARD, SSH, NGINX, DASHBOARD, ADGUARD, COCKPIT_SOCKET]
-  temporary_core_components: [POSTGRESQL]
-  postgresql_core_reason: dashboard_current_dependency
-  dashboard_current_database: azienda_lab
-  dashboard_future_identity_source: AD_LDAP_primary_not_implemented
+  temporary_core_components: []
+  postgresql_core_reason: none_dashboard_is_AD_only
+  dashboard_current_database: none_runtime_dependency
+  dashboard_future_identity_source: AD_LDAP_primary_implemented
   docker_current_decision: CORE_for_current_AdGuard_container
   docker_future_decision: on_demand_if_AdGuard_native_and_no_other_CORE_consumer
-  controller_installation: target_local_only; not_applied_to_azure
+  controller_installation: target_local_declaration_validated_on_vps14
 
 provisioning_order:
   - order: 0
@@ -69,7 +71,7 @@ provisioning_order:
     provides: [cert_soc_lab_ca, id_ldaps, db_postgresql, db_mariadb, db_redis]
     requires: [id_ad_ds, app_adguard, svc_docker]
     data_policy: create_empty_datastores_only
-    service_control_note: PostgreSQL is temporary CORE while azienda-portal uses azienda_lab
+    service_control_note: PostgreSQL is shared on demand by Forgejo and Nextcloud; lifecycle is postgresql@18-main.service; dashboard is AD-only
   - order: 9
     phase: application_deployment
     parallel: true

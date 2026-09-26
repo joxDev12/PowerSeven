@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Nextcloud
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller nextcloud start
+ExecStop=/usr/local/libexec/powerseven-controller nextcloud stop
+TimeoutStartSec=240s
+TimeoutStopSec=120s
+
+[Install]
+WantedBy=multi-user.target

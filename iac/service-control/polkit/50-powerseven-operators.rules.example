@@ -3,8 +3,8 @@ polkit.addRule(function(action, subject) {
         return polkit.Result.NOT_HANDLED;
 
     var allowed = [
-        "powerseven-profile-nextcloud.service",
-        "powerseven-profile-forgejo.service",
+        "powerseven-app-nextcloud.service",
+        "powerseven-app-forgejo.service",
         "powerseven-profile-stirling.service",
         "powerseven-profile-pterodactyl.service",
         "powerseven-profile-wazuh.service",

@@ -47,9 +47,9 @@ Questa regola è documentata soltanto, non applicata.
 ```text
 Cockpit Services
     ↓ D-Bus / Polkit
-powerseven-profile-<name>.service
+powerseven-app-<name>.service
     ↓ fixed allowlist
-powerseven-profile controller
+powerseven-controller
     ↓
 systemd dependencies + docker compose up/stop
     ↓
@@ -57,20 +57,21 @@ application containers and host services
 ```
 
 `powerseven-core.target` avvia WireGuard, `ssh.socket`, Docker/containerd,
-AdGuard, PostgreSQL temporaneo, `azienda-portal.service`, il health check della
-dashboard, Nginx e `cockpit.socket`. `powerseven-stop-all-optional.service` è
-lo stato normale di boot e ferma solo gli optional. Ogni profilo applicativo:
+AdGuard, `azienda-portal.service`, il health check della dashboard, Nginx e
+`cockpit.socket`. PostgreSQL è una dipendenza condivisa, non CORE. Ogni
+applicazione:
 
-- richiede `powerseven-core.target`;
-- dichiara `After=` per l'ordine reale;
-- dichiara `Conflicts=` con gli altri profili;
-- usa `ExecStart`, `ExecStartPost` health check e `ExecStop` idempotenti;
+- dichiara la propria unione di dipendenze;
+- usa una unità `Type=oneshot` e health check bounded;
+- viene rilevata da systemd/Docker a ogni transizione;
+- non usa `Conflicts=` con le altre applicazioni;
 - non contiene `ExecStop` per WireGuard, SSH, Docker, Nginx o AdGuard.
 
-Le dipendenze condivise, come PostgreSQL tra Nextcloud/Forgejo, restano attive
-durante uno switch. PostgreSQL non viene fermato dal kill switch finché la
-dashboard usa `azienda_lab`. La migrazione futura ad AD/LDAP è documentata ma
-non implementata.
+Le dipendenze condivise, come PostgreSQL tra Nextcloud/Forgejo, usano il cluster
+concreto `postgresql@18-main.service` e restano attive
+finché almeno un'applicazione attiva le richiede. Il controller non usa
+contatori persistenti: ricalcola l'unione e ferma solo dipendenze allowlistate
+non più richieste. Docker resta sempre CORE.
 
 La dashboard non è un controller root. Legge in sola lettura
 `/run/powerseven/active-profile`, `services`, `health`, `ram`,
@@ -89,8 +90,8 @@ La regola di esempio
 concede soltanto `start`, `stop` e `restart` su:
 
 ```text
-powerseven-profile-nextcloud.service
-powerseven-profile-forgejo.service
+powerseven-app-nextcloud.service
+powerseven-app-forgejo.service
 powerseven-profile-stirling.service
 powerseven-profile-pterodactyl.service
 powerseven-profile-wazuh.service

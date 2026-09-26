@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Forgejo
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller forgejo start
+ExecStop=/usr/local/libexec/powerseven-controller forgejo stop
+TimeoutStartSec=180s
+TimeoutStopSec=90s
+
+[Install]
+WantedBy=multi-user.target

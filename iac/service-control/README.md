@@ -8,24 +8,23 @@ Normal boot is:
 ```text
 powerseven-core.target
 ├── powerseven-stop-all-optional.service
-└── CORE: WireGuard, SSH, Nginx, dashboard, PostgreSQL (temporary), AdGuard,
+└── CORE: WireGuard, SSH, Nginx, AD-only dashboard, AdGuard,
     Docker (current AdGuard architecture), and Cockpit socket
 ```
 
 The PowerSeven dashboard is the primary laboratory GUI and reads only the
 status contract under `/run/powerseven`. Cockpit is the technical GUI.
-Cockpit's standard Services page starts/stops the concrete optional profile
-units. A root-owned controller maps each unit to a fixed Compose project or
-systemd allowlist; it accepts no arbitrary unit, shell command, path, or
-profile name.
-`Conflicts=` makes profiles mutually exclusive. Profile stops leave shared
-dependencies available for a fast switch; `ALL-OFF-OPTIONAL` stops those
-dependencies explicitly.
+Cockpit's standard Services page starts/stops the concrete application units.
+The root-owned `powerseven-controller.py` maps each application and dependency
+to a fixed allowlist; it accepts no arbitrary unit, shell command, path, or
+Compose project. Each transition detects active applications and recalculates
+the required dependency union. PostgreSQL is stopped only when no active
+consumer remains; Docker is CORE and never stopped by an app transition.
 
 Files:
 
 - `profiles.yml`: profile matrix, ports, measured/estimated RAM and boot policy.
-- `dependency-map.yml`: protected CORE, conflicts and shared-service policy.
+- `dependency-map.yml`: protected CORE, application graph and shared-service policy.
 - `healthchecks.yml`: one healthcheck set for every profile.
 - `optimization.yml`: measured component costs and reversible optimizations.
 - `systemd/`: units to render/install only during a future local provisioning phase.
@@ -38,20 +37,21 @@ Run the validator from the repository root:
 python3 iac/service-control/validate.py
 ```
 
-The local Compose target must use `restart: "no"`. Docker is CORE in the
-current architecture only because AdGuard is a CORE container. A future native
-AdGuard option may make Docker on-demand if no other CORE consumer remains;
-that migration is not implemented.
+The local Compose target must use `restart: "no"`. Docker is CORE because
+AdGuard is a CORE container. PostgreSQL is shared on demand by Forgejo and
+Nextcloud, not part of CORE. The PostgreSQL dependency explicitly maps to
+`postgresql@18-main.service`; `postgresql.service` is only the aggregator.
 
-`azienda-portal.service` and its PostgreSQL `azienda_lab` dependency are CORE
-today. An AD/LDAP-primary dashboard is a future optimization, not an existing
-dependency change. `PORTAL` remains in the profile catalog as a non-selectable
-CORE component for inventory compatibility; it is not an optional profile.
+`azienda-portal.service` is a CORE component and authenticates directly with
+Active Directory. Its former PostgreSQL data remains installed for inspection
+and is not a dashboard runtime dependency.
 
 The controller writes a small read-only status contract under `/run/powerseven`:
-`active-profile`, `services`, `health`, `ram`, `last-transition`, and
+`active-profile`, `active-applications`, `required-dependencies`,
+`actual-dependencies`, `services`, `health`, `ram`, `last-transition`, and
 `last-failure`. A failed transition records `FAILED`, leaves CORE untouched,
-and exits once; there is no retry loop.
+and exits once; an unknown PostgreSQL client produces
+`BLOCKED_BY_EXTERNAL_CONSUMER` and keeps `postgresql@18-main.service` online.
 
 The current Azure host uses `wg-quick@wg0.service`. The future local interface
 name remains a provisioning decision; render the profile units only after the

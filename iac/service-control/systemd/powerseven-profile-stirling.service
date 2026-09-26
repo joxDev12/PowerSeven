@@ -2,7 +2,7 @@
 Description=PowerSeven profile: Stirling PDF
 Requires=powerseven-core.target
 After=powerseven-core.target powerseven-stop-all-optional.service
-Conflicts=powerseven-profile-nextcloud.service powerseven-profile-forgejo.service powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
+Conflicts=powerseven-profile-pterodactyl.service powerseven-profile-wazuh.service powerseven-profile-scribble.service powerseven-stop-all-optional.service
 
 [Service]
 Type=oneshot

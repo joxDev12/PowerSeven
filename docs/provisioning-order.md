@@ -176,10 +176,10 @@ Azure.
 
 ## Regola trasversale VPS14
 
-Dopo l'installazione dei servizi, il boot locale deve abilitare solo CORE e
-`ALL-OFF-OPTIONAL`. CORE comprende WireGuard, SSH, Nginx, dashboard,
-AdGuard, Cockpit socket e PostgreSQL temporaneo finché la dashboard usa
-`azienda_lab`. Il controllo applicativo usa le unità dichiarate in
+Dopo l'installazione dei servizi, il boot locale deve abilitare solo CORE.
+CORE comprende WireGuard, SSH, Nginx, dashboard, AdGuard, Cockpit socket e
+Docker. PostgreSQL è una dipendenza condivisa on demand per Forgejo e
+Nextcloud. Il controllo applicativo usa le unità dichiarate in
 [`iac/service-control/`](../iac/service-control/README.md); i container non
 possono usare restart policy che bypassano il controller. Cockpit standard è
 la GUI tecnica prevista, con Polkit ristretto alle unità optional profile. La

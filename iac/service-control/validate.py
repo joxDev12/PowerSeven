@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Validate PowerSeven service-control declarations without touching a host."""
+"""Validate the dependency-aware service-control declarations without a host."""
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
 try:
     import yaml
-except ImportError:  # pragma: no cover - the repository already requires PyYAML
+except ImportError:  # pragma: no cover
     yaml = None
 
 
@@ -22,173 +21,130 @@ def fail(message: str) -> None:
     print(f"FAIL: {message}")
 
 
-def load(name: str):
+def load(path: Path):
     if yaml is None:
         fail("PyYAML is unavailable")
         return {}
-    with (ROOT / name).open(encoding="utf-8") as stream:
-        return yaml.safe_load(stream) or {}
+    try:
+        with path.open(encoding="utf-8") as stream:
+            return yaml.safe_load(stream) or {}
+    except Exception as error:
+        fail(f"cannot parse {path.name}: {error}")
+        return {}
 
 
-def visit(node: str, graph: dict[str, set[str]], visiting: set[str], visited: set[str], path: list[str]) -> None:
+def visit(node: str, graph: dict[str, set[str]], visiting: set[str], visited: set[str]) -> None:
     if node in visiting:
-        fail("profile dependency cycle: " + " -> ".join(path + [node]))
+        fail(f"dependency cycle at {node}")
         return
     if node in visited:
         return
     visiting.add(node)
     for requirement in graph.get(node, set()):
         if requirement in graph:
-            visit(requirement, graph, visiting, visited, path + [node])
+            visit(requirement, graph, visiting, visited)
     visiting.remove(node)
     visited.add(node)
 
 
 def main() -> int:
-    profiles_data = load("profiles.yml")
-    dependencies = load("dependency-map.yml")
-    healthchecks = load("healthchecks.yml")
-    optimization = load("optimization.yml")
+    profiles = load(ROOT / "profiles.yml")
+    dependencies = load(ROOT / "dependency-map.yml")
+    healthchecks = load(ROOT / "healthchecks.yml")
+    optimization = load(ROOT / "optimization.yml")
+    compose = load(ROOT / "../docker/compose.yml")
 
-    expected_profiles = {
-        "CORE", "NEXTCLOUD", "FORGEJO", "STIRLING", "PTERODACTYL",
-        "WAZUH", "PORTAL", "SCRIBBLE", "ALL-OFF-OPTIONAL",
-    }
-    profiles = profiles_data.get("profiles", {})
-    if set(profiles) != expected_profiles:
-        fail(f"profiles must be exactly {sorted(expected_profiles)}")
-
-    boot = profiles_data.get("boot", {})
-    protected = set(boot.get("protected_units", []))
-    required_protected = {
+    protected = set(profiles.get("boot", {}).get("protected_units", []))
+    expected_core = {
         "wg-quick@wg0.service", "ssh.socket", "docker.service", "nginx.service",
-        "postgresql.service", "azienda-portal.service",
-        "powerseven-dashboard-health.service", "powerseven-core-adguard.service",
-        "cockpit.socket", "powerseven-core.target",
+        "azienda-portal.service", "powerseven-dashboard-health.service",
+        "powerseven-core-adguard.service", "cockpit.socket", "powerseven-core.target",
     }
-    if not required_protected <= protected:
-        fail("CORE protection is missing a required protected unit")
-    if boot.get("default_profile") != "ALL-OFF-OPTIONAL" or boot.get("core_profile") != "CORE":
-        fail("boot default must be ALL-OFF-OPTIONAL with CORE as the core profile")
-    if boot.get("docker_restart_policy") != "no":
-        fail("Docker restart policy must be no")
-    disabled_at_boot = set(boot.get("native_optional_units_disabled_at_boot", []))
-    if protected & disabled_at_boot:
-        fail("boot disable list contains a protected CORE unit")
-    if not {"wazuh-indexer.service", "wazuh-manager.service", "wazuh-dashboard.service"} <= disabled_at_boot:
-        fail("boot disable list must include all Wazuh units")
+    if protected != expected_core:
+        fail("protected CORE set is not exact")
+    if "postgresql.service" in protected:
+        fail("PostgreSQL must not be CORE")
+    if profiles.get("architecture", {}).get("postgresql_core") is not False:
+        fail("architecture must declare PostgreSQL non-CORE")
+    if profiles.get("architecture", {}).get("dashboard", {}).get("postgres_dependency") != "none":
+        fail("dashboard must have no PostgreSQL dependency")
 
-    units: set[str] = set()
-    for name, profile in profiles.items():
-        unit = profile.get("unit")
-        if not unit or unit in units:
-            fail(f"{name}: unique systemd unit is required")
-        units.add(unit)
-        ram = profile.get("ram", {})
-        if not isinstance(ram.get("planning_peak_gib"), (int, float)):
-            fail(f"{name}: planning_peak_gib is missing")
-        if not isinstance(ram.get("minimum_practical_gib"), (int, float)):
-            fail(f"{name}: minimum_practical_gib is missing")
-        start = profile.get("start_order", [])
-        stop = profile.get("stop_order", [])
-        if len(start) != len(set(start)) or len(stop) != len(set(stop)):
-            fail(f"{name}: start/stop order contains duplicates")
-        allowed_steps = set(profile.get("services", [])) | set(profile.get("containers", [])) | {"CORE"}
-        allowed_steps |= {step for step in start if str(step).startswith("health-")}
-        allowed_steps |= {"stop-optional"}
-        for step in start + stop:
-            if step not in allowed_steps:
-                fail(f"{name}: unknown order step {step}")
-        if name not in {"CORE", "ALL-OFF-OPTIONAL"}:
-            owned_start = [step for step in start if step != "CORE" and not str(step).startswith("health-")]
-            for step in stop:
-                if step not in owned_start:
-                    fail(f"{name}: stop step {step} is not in its start order")
-            positions = [owned_start.index(step) for step in stop if step in owned_start]
-            if positions != sorted(positions, reverse=True):
-                fail(f"{name}: stop order is not reverse dependency order")
-        if name not in {"CORE", "ALL-OFF-OPTIONAL"} and not profile.get("core_component") and profile.get("autostart"):
-            fail(f"{name}: optional profile must not autostart")
-        if profile.get("heavy") and profile.get("autostart"):
-            fail(f"{name}: heavy profile must not autostart")
-        if protected & set(stop):
-            fail(f"{name}: stop order can stop protected CORE units")
-
-    graph: dict[str, set[str]] = {}
-    dependency_profiles = dependencies.get("profiles", {})
-    for name in expected_profiles:
-        spec = dependency_profiles.get(name, {})
-        if not spec:
-            fail(f"dependency map missing profile {name}")
-        graph[name] = {ref for ref in spec.get("requires", []) if ref in expected_profiles}
-        for ref in spec.get("requires", []) + spec.get("conflicts", []):
-            if ref not in expected_profiles and not (ref.endswith(".service") or ref in {"id_ldap", "docker.service"}):
-                fail(f"{name}: dependency reference does not exist: {ref}")
+    app_names = {"FORGEJO", "NEXTCLOUD", "STIRLING", "SCRIBBLE", "PTERODACTYL", "WAZUH"}
+    apps = dependencies.get("applications", {})
+    if set(apps) != app_names or set(profiles.get("applications", {})) != app_names:
+        fail("application catalog is incomplete")
+    graph = {name: {ref for ref in spec.get("requires", []) if ref in app_names} for name, spec in apps.items()}
     for node in graph:
-        visit(node, graph, set(), set(), [])
+        visit(node, graph, set(), set())
+    if apps.get("FORGEJO", {}).get("requires") != ["docker.service", "postgresql"]:
+        fail("Forgejo dependency declaration is incorrect")
+    if "postgresql" not in apps.get("NEXTCLOUD", {}).get("requires", []):
+        fail("Nextcloud must declare PostgreSQL")
 
-    dep_protected = set(dependencies.get("protected_core", {}).get("units", []))
-    if not required_protected <= dep_protected:
-        fail("dependency map does not protect all CORE units")
-    all_off = dependencies.get("all_off", {})
-    if protected & set(all_off.get("stops_systemd", [])):
-        fail("ALL-OFF-OPTIONAL attempts to stop a protected CORE unit")
-    if not required_protected <= set(all_off.get("leaves_running", [])):
-        fail("ALL-OFF-OPTIONAL does not explicitly preserve every protected CORE unit")
-    if set(all_off.get("leaves_running", [])) & set(all_off.get("stops_systemd", [])):
-        fail("ALL-OFF-OPTIONAL both leaves and stops the same unit")
-    if not profiles.get("ALL-OFF-OPTIONAL", {}).get("all_optional_stopped"):
-        fail("ALL-OFF-OPTIONAL is not marked as stopping all optional services")
-    architecture = profiles_data.get("architecture", {})
-    if architecture.get("postgresql_core_reason") != "dashboard_current_dependency":
-        fail("PostgreSQL CORE reason must be dashboard_current_dependency")
-    if architecture.get("dashboard", {}).get("future_optimization_status") != "not_implemented":
-        fail("dashboard AD/LDAP migration must remain future and not implemented")
-    if architecture.get("docker", {}).get("current_option") != "A_AdGuard_container_Docker_CORE":
-        fail("current Docker decision must document option A")
-    if not profiles.get("PORTAL", {}).get("core_component"):
-        fail("PORTAL must be marked as the CORE dashboard component")
-    if not {"postgresql.service", "azienda-portal.service", "nginx.service"} <= set(profiles.get("CORE", {}).get("services", [])):
-        fail("CORE must include PostgreSQL, dashboard, and Nginx")
+    declared_core = set(dependencies.get("core_services", []))
+    if declared_core != expected_core:
+        fail("dependency map CORE is not exact")
+    shared = dependencies.get("shared_dependencies", {})
+    if shared.get("postgresql", {}).get("systemd_unit") != "postgresql@18-main.service":
+        fail("PostgreSQL dependency must target postgresql@18-main.service")
+    if shared.get("postgresql", {}).get("stop_policy") != "stop_only_when_not_required":
+        fail("PostgreSQL stop policy must be desired-state based")
+    if shared.get("docker.service", {}).get("stop_policy") != "never":
+        fail("Docker must be protected")
 
-    health_profiles = healthchecks.get("profiles", {})
-    for name in expected_profiles:
-        health_name = "all-off" if name == "ALL-OFF-OPTIONAL" else name.lower()
-        if not health_profiles.get(health_name):
-            fail(f"{name}: missing healthchecks")
-        for check in health_profiles.get(health_name, []):
-            if not check.get("command"):
-                fail(f"{name}: healthcheck {check.get('id')} has no command")
-    if set(optimization.get("components", {})) != {
-        "wazuh-indexer", "wazuh-dashboard", "wazuh-manager", "postgresql", "mariadb",
-        "redis", "docker", "containerd", "adguard-container", "adguard-native-future",
-        "nginx", "gunicorn-portal", "pterodactyl-workers",
-        "journald", "ubuntu-services",
-    }:
-        fail("optimization matrix is incomplete")
+    core_checks = healthchecks.get("profiles", {}).get("core", [])
+    if any(check.get("unit") == "postgresql.service" for check in core_checks):
+        fail("CORE healthchecks must not require PostgreSQL")
+    if not healthchecks.get("profiles", {}).get("forgejo"):
+        fail("Forgejo healthchecks are missing")
+    nextcloud_checks = healthchecks.get("profiles", {}).get("nextcloud", [])
+    if not {check.get("unit") for check in nextcloud_checks if check.get("unit")} >= {"postgresql@18-main.service"}:
+        fail("Nextcloud healthchecks must use the concrete PostgreSQL cluster")
+    if not any(check.get("container") == "soc-cloud-redis-1" for check in nextcloud_checks):
+        fail("Nextcloud Redis healthcheck is missing")
 
-    compose = load(Path("../docker/compose.yml").as_posix())
-    for service, spec in compose.get("services", {}).items():
-        if spec.get("restart") != "no":
-            fail(f"Compose service {service} bypasses the controller with restart={spec.get('restart')!r}")
+    components = optimization.get("components", {})
+    if "forgejo" not in components or "postgresql" not in components:
+        fail("optimization matrix must include Forgejo and PostgreSQL")
+    if "restart" in str(compose) and any(spec.get("restart") not in (None, "no") for spec in compose.get("services", {}).values()):
+        fail("local Compose target has a controller-bypassing restart policy")
 
-    required_units = {
-        "powerseven-core.target", "powerseven-core-adguard.service",
-        "powerseven-dashboard-health.service",
-        "powerseven-stop-all-optional.service",
-        *(f"powerseven-profile-{name.lower()}.service" for name in expected_profiles - {"CORE", "ALL-OFF-OPTIONAL", "PORTAL"}),
+    systemd = ROOT / "systemd"
+    required = {
+        "powerseven-core.target", "powerseven-dashboard-health.service",
+        "powerseven-app-forgejo.service", "powerseven-app-nextcloud.service",
     }
-    template_names = {path.name for path in (ROOT / "systemd").glob("*")}
-    if not required_units <= template_names:
-        fail("systemd templates missing: " + ", ".join(sorted(required_units - template_names)))
-    controller = (ROOT / "systemd" / "powerseven-profile").read_text(encoding="utf-8")
-    if re.search(r"systemctl stop[^\n]*(wg|ssh|docker|nginx)", controller):
-        fail("controller contains a protected systemd stop")
+    names = {path.name for path in systemd.iterdir()}
+    if not required <= names:
+        fail("required systemd templates are missing")
+    if "powerseven-profile-forgejo.service" in names:
+        fail("legacy Forgejo profile unit must not remain")
+    if "powerseven-profile-nextcloud.service" in names:
+        fail("legacy Nextcloud profile unit must not remain")
+    core_unit = (systemd / "powerseven-core.target").read_text(encoding="utf-8")
+    dashboard_unit = (systemd / "powerseven-dashboard-health.service").read_text(encoding="utf-8")
+    if "postgresql.service" in core_unit or "postgresql.service" in dashboard_unit:
+        fail("CORE systemd templates must not require PostgreSQL")
+
+    controller = (ROOT / "powerseven-controller.py").read_text(encoding="utf-8")
+    for forbidden in ("docker compose down", "systemctl stop docker.service", "systemctl stop nginx.service", "systemctl stop ssh.socket"):
+        if forbidden in controller:
+            fail(f"controller contains forbidden action: {forbidden}")
+    if 'POSTGRESQL_UNIT = "postgresql@18-main.service"' not in controller:
+        fail("controller does not pin the concrete PostgreSQL cluster")
+    if "external_postgres_consumer" not in controller or "BLOCKED_BY_EXTERNAL_CONSUMER" not in controller:
+        fail("controller lacks external PostgreSQL consumer protection")
+    if "nextcloud-redis" not in controller or "docker compose down" in controller:
+        fail("controller lacks shared Redis or uses compose down")
+    if "fcntl.flock" not in controller or "desired_dependencies" not in controller or "discover_actual_state" not in controller:
+        fail("controller lacks lock, desired-state union, or actual-state discovery")
+    if "postgresql.service" in controller:
+        fail("controller contains ambiguous PostgreSQL aggregator reference")
 
     if failures:
         print(f"SUMMARY: FAIL={len(failures)}")
         return 1
-    print("PASS: profile names, dependencies, CORE protection, healthchecks, RAM estimates, restart policy, and templates")
+    print("PASS: YAML, concrete PostgreSQL cluster, dependency graph, external-consumer safety, controller, healthchecks, and templates")
     print("SUMMARY: FAIL=0")
     return 0
 

@@ -299,7 +299,7 @@ configurare cert nuovi; pubblicare Dashboard via Nginx.
 
 ## Fase 12A — service profiles e Cockpit
 
-**Obiettivo:** boot CORE-only e un solo profilo applicativo alla volta.
+**Obiettivo:** boot CORE-only e applicazioni indipendenti con dipendenze condivise.
 
 **Prerequisiti:** Docker, servizi host e applicazioni installati; unità
 WireGuard locale verificata; nessun secret nel repository.
@@ -309,11 +309,10 @@ reale dell'unità WireGuard, configurare `restart: "no"` nei Compose, abilitare
 solo `powerseven-core.target`, installare Cockpit e socket activation in una
 fase separata, quindi applicare Polkit dopo il test con un account non-sudo.
 
-**Configurazione attesa:** boot = CORE + ALL-OFF-OPTIONAL; CORE contiene
-WireGuard, SSH, Nginx, dashboard azienda-portal, AdGuard, Cockpit socket e
-PostgreSQL temporaneo (`azienda_lab`). MariaDB/Redis, Wazuh e app optional non
-partono da soli; ogni profilo ha health check. Docker resta CORE solo perché
-AdGuard è ancora containerizzato.
+**Configurazione attesa:** boot = CORE; CORE contiene WireGuard, SSH, Nginx,
+dashboard azienda-portal AD-only, AdGuard, Cockpit socket e Docker. PostgreSQL,
+MariaDB, Redis e PHP-FPM sono dipendenze condivise on demand; il controller
+ricalcola ogni volta l'unione delle dipendenze delle applicazioni attive.
 
 La dashboard PowerSeven resta la GUI principale (`login.lab.test` via Nginx).
 Cockpit su `https://10.10.10.14:9090` è la GUI tecnica; non creare un plugin

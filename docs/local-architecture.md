@@ -119,7 +119,8 @@ VMware resta conservativa a 6 GiB finché il test locale non prova il margine a
   Global Catalog, Windows Firewall, RDP, OpenSSH, Wazuh Agent.
 - VPS14: WireGuard hub, Docker/containerd, database vuoti, AdGuard, Nginx,
   dashboard azienda-portal e Cockpit socket; Wazuh, applicazioni e Pterodactyl
-  sono profili. PostgreSQL è CORE temporaneo per `azienda_lab`. Nessun vecchio
+  sono applicazioni indipendenti. PostgreSQL è shared dependency di Forgejo e
+  Nextcloud, non CORE. Nessun vecchio
   volume.
 - VPS12: Ubuntu Desktop, WireGuard peer, SSSD/Kerberos, XFCE, XRDP, SSH,
   Wazuh Agent.

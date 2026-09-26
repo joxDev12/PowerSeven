@@ -1,7 +1,7 @@
 [Unit]
 Description=PowerSeven CORE dashboard health check
-Requires=postgresql.service azienda-portal.service
-After=postgresql.service azienda-portal.service
+Requires=azienda-portal.service
+After=azienda-portal.service
 PartOf=powerseven-core.target
 
 [Service]

@@ -1,7 +1,7 @@
 [Unit]
 Description=PowerSeven CORE services
-Wants=wg-quick@wg0.service ssh.socket docker.service powerseven-core-adguard.service postgresql.service azienda-portal.service powerseven-dashboard-health.service nginx.service cockpit.socket powerseven-stop-all-optional.service
-After=wg-quick@wg0.service ssh.socket docker.service powerseven-core-adguard.service postgresql.service azienda-portal.service powerseven-dashboard-health.service nginx.service cockpit.socket
+Wants=wg-quick@wg0.service ssh.socket docker.service powerseven-core-adguard.service azienda-portal.service powerseven-dashboard-health.service nginx.service cockpit.socket powerseven-stop-all-optional.service
+After=wg-quick@wg0.service ssh.socket docker.service powerseven-core-adguard.service azienda-portal.service powerseven-dashboard-health.service nginx.service cockpit.socket
 AllowIsolate=no
 
 [Install]

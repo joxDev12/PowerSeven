@@ -36,17 +36,17 @@ di processo/cgroup sotto sono più utili per dimensionare i profili.
 | Container | RAM live | Limite | PIDs | Health | Restart policy |
 |---|---:|---:|---:|---|---|
 | AdGuard | 126.9 MiB | 512 MiB | 8 | assente | `unless-stopped` |
-| Forgejo | 190.9 MiB | 1 GiB | 12 | assente | `unless-stopped` |
+| Forgejo | 105.3 MiB warm start | 1 GiB | 12 | Docker healthy + HTTP 200 | `no` |
 | Stirling | 917.1 MiB | 2 GiB | 54 | healthy | `unless-stopped` |
-| Nextcloud cron | 1.5 MiB | 512 MiB | 1 | assente | `unless-stopped` |
-| Nextcloud app | 177 MiB | 2 GiB | 9 | assente | `unless-stopped` |
-| Nextcloud Redis | 8.8 MiB | 256 MiB | 6 | assente | `unless-stopped` |
+| Nextcloud cron | 0.4 MiB | 512 MiB | 1 | controller cron | `no` |
+| Nextcloud app | 54.3 MiB warm start | 2 GiB | 9 | `/status.php` 200 | `no` |
+| Nextcloud Redis | 10.6 MiB | 256 MiB | 6 | `redis-cli ping` | `no` |
 | Scribble 8082 | 26.7 MiB | 2.3 GiB | 8 | assente | `no` |
 | Scribble 8081 | 26.7 MiB | 2.3 GiB | 8 | assente | `no` |
 
-Le restart policy live bypassano il controller per AdGuard, Forgejo, Stirling
-e tutto Nextcloud. Il target locale dichiarativo è stato corretto a
-`restart: "no"`; la VPS14 Azure non è stata modificata.
+Le restart policy live restano `unless-stopped` solo per AdGuard e Stirling,
+fuori perimetro in questa fase. Forgejo e Nextcloud usano ora `restart: "no"`
+e sono gestiti dalle unità PowerSeven.
 
 ### Cgroup e systemd
 
@@ -57,7 +57,7 @@ e tutto Nextcloud. Il target locale dichiarativo è stato corretto a
 | `wazuh-dashboard.service` | 187 MiB | 209 MiB / 1 |
 | `docker.service` | 203 MiB | 183 MiB / 11 |
 | `mariadb.service` | 146 MiB | 141 MiB / 1 |
-| `postgresql@18-main.service` | 97 MiB | 49 MiB / 11 |
+| `postgresql@18-main.service` | 47.7 MiB baseline | concrete cluster lifecycle unit |
 | `azienda-portal.service` | 45 MiB | 48 MiB / 2 |
 | `pteroq.service` | 39 MiB | 48 MiB / 1 |
 | `wings.service` | 24 MiB | 36 MiB / 1 |
@@ -74,7 +74,7 @@ Servizi applicativi o pesanti attivi e abilitati al boot oggi:
 
 ```text
 docker containerd nginx
-postgresql.service postgresql@18-main.service
+postgresql.service (aggregator) / postgresql@18-main.service (cluster lifecycle)
 mariadb redis-server php8.3-fpm
 azienda-portal pteroq wings
 filebeat
@@ -107,8 +107,7 @@ MUST STAY ON:
 - `azienda-portal.service`/Gunicorn, dashboard PowerSeven;
 - AdGuard Home, resolver finale di DC02;
 - `cockpit.socket`, con accesso futuro solo dalla VPN;
-- `postgresql.service` come CORE temporaneo, perché la dashboard usa oggi
-  `azienda_lab` (`postgresql_core_reason: dashboard_current_dependency`).
+- dashboard AD-only; PostgreSQL è shared dependency di Forgejo/Nextcloud.
 
 Docker è CORE nella scelta corrente A perché AdGuard è un container. `containerd`
 segue Docker. La scelta futura B (AdGuard nativo e Docker on-demand) non è
@@ -117,21 +116,20 @@ risparmio. AdGuard live pesa 126.9 MiB container / ~153 MiB RSS; Docker daemon
 ha 183 MiB PSS e cgroup 203 MiB. Il passaggio nativo non ha quindi un
 risparmio garantito sufficiente a giustificare ora il cambio.
 
-La futura integrazione AD/LDAP può rendere PostgreSQL on-demand solo dopo aver
-migrato la dashboard e verificato che nessun altro componente CORE usi
-`azienda_lab`. È una FUTURE OPTIMIZATION / NOT IMPLEMENTED.
+La dashboard AD-only consente già PostgreSQL on-demand; il controller lo
+mantiene attivo finché Forgejo o Nextcloud risultano applicazioni attive.
 
 ## Matrice profili
 
 | Profilo | Stack avviato | Dipendenze/start order | Stop order | Porte | Health check | RAM pianificata |
 |---|---|---|---|---|---|---:|
-| CORE | WG, SSH, Docker/containerd, AdGuard, PostgreSQL, dashboard, Nginx, Cockpit socket | rete → SSH → Docker → AdGuard → PostgreSQL → dashboard → health → Nginx | mai tramite kill switch | 22, 53, 80, 443, 51820, 9090 | unità + DNS + dashboard | 2.0 GiB peak |
+| CORE | WG, SSH, Docker/containerd, AdGuard, dashboard, Nginx, Cockpit socket | rete → SSH → Docker → AdGuard → dashboard → health → Nginx | mai tramite controller | 22, 53, 80, 443, 51820, 9090 | unità + DNS + dashboard | 2.0 GiB peak |
 | NEXTCLOUD | PostgreSQL; Redis/app/cron `soc-cloud` | CORE → PostgreSQL → Redis → app → cron | cron → app → Redis | 8083 locale, 443 | `/status.php` 200 | 2.5 GiB |
 | FORGEJO | PostgreSQL; Forgejo `soc-forgejo` | CORE → PostgreSQL → Forgejo | Forgejo | 3001 locale, 443 | HTTP 200 | 2.3 GiB |
 | STIRLING | Stirling PDF | CORE → container | Stirling | 8084 locale, 443 | Docker healthy/HTTP | 3.2 GiB |
 | PTERODACTYL | MariaDB, Redis, PHP-FPM, pteroq, Wings | CORE → DB/cache → PHP → queue → Wings | Wings → queue → PHP → cache → DB | 8080 locale, 2022, 443 | DB/panel/Wings | 1.8 GiB control plane; 4 GiB con un server da 2 GiB |
 | WAZUH | Indexer, Filebeat, Manager, Dashboard | CORE → Indexer → Filebeat/Manager → Dashboard | Dashboard → Manager → Filebeat → Indexer | 1514, 1515, 55000, 443 | unità/API/UI | 5.0 GiB target; 4 GiB sperimentale |
-| PORTAL | componente CORE: PostgreSQL, Gunicorn 1 worker, dashboard health | CORE → PostgreSQL → portal → health | mai tramite profilo optional | 5000 locale, 443 | HTTP 200 sempre disponibile | incluso in CORE |
+| PORTAL | componente CORE: Gunicorn 1 worker, dashboard health, AD bind | CORE → portal → health | mai tramite profilo optional | 5000 locale, 443 | HTTP 200 sempre disponibile | incluso in CORE |
 | SCRIBBLE | due container Scribble | CORE → scribble-1/2 | 2 → 1 | 8081/8082 locali, 443 | TCP 8081/8082 | 1.8 GiB |
 | ALL-OFF-OPTIONAL | nessun optional | CORE → stop controller | tutti gli optional | solo CORE | CORE + dashboard HTTP 200 | 2.0 GiB peak |
 
@@ -145,18 +143,19 @@ componente CORE non selezionabile, non un profilo applicativo opzionale.
 
 ## Design systemd e kill switch
 
-Ogni profilo è un `Type=oneshot`, `RemainAfterExit=yes`, visibile come servizio
-normale in Cockpit. `Requires=powerseven-core.target` e `After=` avviano le
-dipendenze; `Conflicts=` rende incompatibili i profili. `ExecStart` e `ExecStop`
-chiamano un controller con allowlist fissa; `ExecStartPost` esegue l'health
-check. Le dipendenze condivise non vengono fermate durante lo switch e vengono
-fermate solo da `powerseven-stop-all-optional.service`.
+Ogni applicazione migrata è un `Type=oneshot`, `RemainAfterExit=yes`, visibile
+come servizio normale in Cockpit. `ExecStart` e `ExecStop` chiamano un
+controller con allowlist fissa; il controller rileva le applicazioni attive,
+calcola l'unione delle dipendenze e applica health check bounded. Le
+applicazioni non dichiarano `Conflicts=`; PostgreSQL viene fermato solo quando
+nessun consumer attivo lo richiede. Docker resta protetto come CORE.
 
-Il kill switch lascia sempre attivi WireGuard, SSH, Docker/containerd, Nginx,
-AdGuard, Cockpit socket, dashboard e PostgreSQL finché la dashboard usa
-`azienda_lab`. Non contiene né invoca stop su unità CORE. La validazione
-statica rifiuta eventuali stop su unità protette, cicli, dipendenze mancanti,
-healthcheck assenti, RAM assente o restart policy diversa da `no`.
+Il controller lascia sempre attivi WireGuard, SSH, Docker/containerd, Nginx,
+AdGuard, Cockpit socket e dashboard. PostgreSQL è condiviso on demand e non
+viene fermato se Forgejo o Nextcloud lo richiede. Non contiene né invoca stop
+su unità CORE. La validazione statica rifiuta eventuali stop su unità
+protette, cicli, dipendenze mancanti, healthcheck assenti o restart policy
+diversa da `no`.
 
 Il control plane è separato: Dashboard = visualizzazione/status read-only;
 Cockpit = GUI tecnica; systemd = autorità; `powerseven-service` = allowlist;

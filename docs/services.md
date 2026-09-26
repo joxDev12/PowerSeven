@@ -4,7 +4,7 @@ VPS14 (`soc-server`, `10.10.10.14`) ospita il proxy, i container e i servizi cen
 
 | DNS | Processo/container e porta osservati | Dipendenza/storage | Health check read-only e failure mode |
 |---|---|---|---|
-| `cloud.lab.test` | Nextcloud Docker, `127.0.0.1:8083` | PostgreSQL e Redis dichiarati; configurazione effettiva non verificata | `curl -kI https://cloud.lab.test`; guasto Nginx, container o DB |
+| `cloud.lab.test` | Nextcloud Docker, `127.0.0.1:8083` | PostgreSQL `10.10.10.14:5432`, Redis Docker `soc-cloud-redis-1`; `/status.php` verificato 200 | `curl -kI https://cloud.lab.test`; guasto Nginx, container o DB |
 | `git.lab.test` | Forgejo Docker, `127.0.0.1:3001` | PostgreSQL dichiarato; LDAP non verificato | `curl -kI https://git.lab.test`; guasto proxy/container/DB |
 | `pdf.lab.test` | Stirling PDF Docker, `127.0.0.1:8084` | storage e autenticazione non verificati | `curl -kI https://pdf.lab.test`; guasto proxy/container |
 | `adguard.lab.test` | AdGuard Docker, UI `127.0.0.1:3002`; DNS `10.10.10.14:53` TCP/UDP | upstream DNS Internet | `sudo docker ps`; guasto DNS esterno o container |

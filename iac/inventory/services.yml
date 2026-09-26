@@ -24,15 +24,17 @@ dns_bootstrap:
   switch_after: app_adguard
 service_control:
   declaration: ../service-control/profiles.yml
-  boot_profile: ALL-OFF-OPTIONAL
+  boot_profile: CORE
   core_profile: CORE
   docker_restart_policy_target: "no"
   current_azure_observation: profile control not installed; application units and container restart policies are independent
   core_components: [svc_wireguard_hub, svc_ssh_vps14, svc_nginx, app_portal, app_adguard, cockpit_socket]
-  temporary_core: [db_postgresql]
-  postgresql_core_reason: dashboard_current_dependency
-  dashboard_database_current: azienda_lab
-  dashboard_future_identity: AD_LDAP_primary_not_implemented
+  temporary_core: []
+  postgresql_core_reason: none_dashboard_is_AD_only
+  dashboard_database_current: none_runtime_dependency
+  dashboard_future_identity: AD_LDAP_primary_implemented
+  postgresql_lifecycle_unit: postgresql@18-main.service
+  postgresql_aggregator_unit: postgresql.service
   docker_current: CORE_because_app_adguard_is_containerized
   docker_future: on_demand_only_after_native_adguard_migration
 services:
@@ -171,6 +173,7 @@ services:
     auth: LDAP/LDAPS target; runtime setting unverified
     depends_on: [id_ldap, db_postgresql, container_nextcloud_redis]
     container: container_nextcloud_app
+    controller_unit: powerseven-app-nextcloud.service
   - graph_id: app_forgejo
     host: vps14
     kind: application
@@ -190,12 +193,13 @@ services:
     host: vps14
     kind: database
     name: PostgreSQL
+    systemd_unit: postgresql@18-main.service
     version_observed: "18.6"
     listen: [127.0.0.1:5432, 10.10.10.14:5432]
     databases: [azienda_lab, forgejo, nextcloud, postgres]
     persistent: true
-    core_current: temporary
-    core_reason: dashboard_current_dependency
+    core_current: false
+    core_reason: shared_dependency_for_forgejo_and_nextcloud
     secret_refs: [postgres_admin_password, application_database_passwords]
   - graph_id: db_mariadb
     host: vps14

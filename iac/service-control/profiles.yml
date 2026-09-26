@@ -1,28 +1,17 @@
-schema_version: 1
+schema_version: 2
 scope: target_local_vmware
 source: measured_vps14_discovery_2026-09-26
 
 boot:
-  default_profile: ALL-OFF-OPTIONAL
+  default_profile: CORE
   core_profile: CORE
-  heavy_profiles_must_not_autostart: true
-  docker_restart_policy: "no"
-  native_optional_units_disabled_at_boot:
-    - mariadb.service
-    - redis-server.service
-    - php8.3-fpm.service
-    - pteroq.service
-    - wings.service
-    - filebeat.service
-    - wazuh-indexer.service
-    - wazuh-manager.service
-    - wazuh-dashboard.service
+  heavy_applications_must_not_autostart: true
+  docker_restart_policy: controller_owned_for_managed_apps
   protected_units:
     - wg-quick@wg0.service
     - ssh.socket
     - docker.service
     - nginx.service
-    - postgresql.service
     - azienda-portal.service
     - powerseven-dashboard-health.service
     - powerseven-core-adguard.service
@@ -30,237 +19,75 @@ boot:
     - powerseven-core.target
 
 architecture:
-  core_must_stay_on:
-    - wg-quick@wg0.service
-    - ssh.socket
-    - nginx.service
-    - azienda-portal.service
-    - powerseven-dashboard-health.service
-    - powerseven-core-adguard.service
-    - cockpit.socket
-  temporary_core:
-    - postgresql.service
-  postgresql_core_reason: dashboard_current_dependency
+  model: dependency_aware_desired_state
+  core_services:
+    - WireGuard
+    - SSH
+    - Nginx
+    - azienda-portal
+    - AdGuard
+    - Cockpit socket
+    - Docker/containerd
+  optional_shared_dependencies:
+    - postgresql
+    - mariadb
+    - redis
+    - php-fpm
+  postgresql_core: false
   dashboard:
     service: azienda-portal.service
-    database: azienda_lab
-    current_design: dashboard -> PostgreSQL azienda_lab
-    future_design: dashboard -> AD/LDAP primary; PostgreSQL on-demand if no CORE consumer remains
-    future_optimization: true
-    future_optimization_status: not_implemented
-  docker:
-    current_state: CORE
-    current_reason: current_adguard_container
-    current_option: A_AdGuard_container_Docker_CORE
-    future_option: B_AdGuard_native_Docker_on_demand
-    future_status: not_implemented
-    containerd_currently_follows: docker.service
-  status_contract:
+    authentication: Active Directory direct user bind
+    postgres_dependency: none
+  state:
     directory: /run/powerseven
-    files: [active-profile, services, health, ram, last-transition, last-failure]
-    writer: powerseven-service
-    owner: root
-    mode: "0644"
-    dashboard_access: read-only
-    dashboard_must_not_write: true
-    failure_profile: FAILED
-    idle_profile: NONE
+    source_of_truth: systemd_and_docker_detection
+    cache_files: [active-applications, required-dependencies, actual-dependencies, services, health, last-transition, last-failure]
+  transition:
+    lock: /run/lock/powerseven-controller.lock
+    retry_policy: bounded_timeout_no_restart_loop
 
-profiles:
-  CORE:
-    unit: powerseven-core.target
-    autostart: true
-    heavy: false
-    services: [wg-quick@wg0.service, ssh.socket, docker.service, powerseven-core-adguard.service, postgresql.service, azienda-portal.service, powerseven-dashboard-health.service, nginx.service, cockpit.socket]
-    containers: [soc-adguard-adguard-1]
-    databases: [postgresql]
-    dependencies: []
-    start_order: [wg-quick@wg0.service, ssh.socket, docker.service, powerseven-core-adguard.service, postgresql.service, azienda-portal.service, powerseven-dashboard-health.service, nginx.service, cockpit.socket]
-    stop_order: []
-    healthchecks: [core]
-    ports: [22/tcp, 53/tcp, 53/udp, 80/tcp, 443/tcp, 51820/udp]
-    incompatibilities: []
-    shared_services: [docker.service, nginx.service]
-    ram:
-      observed_component_floor_gib: 0.6
-      planning_peak_gib: 2.0
-      minimum_practical_gib: 3
-      confidence: medium; dashboard and PostgreSQL are temporary CORE
-    cpu: low
-
-  NEXTCLOUD:
-    unit: powerseven-profile-nextcloud.service
-    autostart: false
-    heavy: true
-    services: [postgresql.service, powerseven-profile-nextcloud.service]
-    containers: [soc-cloud-redis-1, soc-cloud-app-1, soc-cloud-cron-1]
-    databases: [postgresql]
-    dependencies: [CORE, id_ldap]
-    start_order: [CORE, postgresql.service, soc-cloud-redis-1, soc-cloud-app-1, soc-cloud-cron-1, health-nextcloud]
-    stop_order: [soc-cloud-cron-1, soc-cloud-app-1, soc-cloud-redis-1]
-    healthchecks: [nextcloud]
-    ports: [127.0.0.1:8083/tcp, 443/tcp]
-    incompatibilities: [FORGEJO, STIRLING, PTERODACTYL, WAZUH, SCRIBBLE]
-    shared_services: [docker.service, nginx.service, postgresql.service]
-    ram:
-      observed_component_floor_gib: 0.3
-      planning_peak_gib: 2.5
-      minimum_practical_gib: 3
-      confidence: medium
-    cpu: medium
-
+applications:
   FORGEJO:
-    unit: powerseven-profile-forgejo.service
+    unit: powerseven-app-forgejo.service
     autostart: false
-    heavy: true
-    services: [postgresql.service, powerseven-profile-forgejo.service]
-    containers: [soc-forgejo-forgejo-1]
-    databases: [postgresql]
-    dependencies: [CORE, id_ldap]
-    start_order: [CORE, postgresql.service, soc-forgejo-forgejo-1, health-forgejo]
-    stop_order: [soc-forgejo-forgejo-1]
-    healthchecks: [forgejo]
-    ports: [127.0.0.1:3001/tcp, 443/tcp]
-    incompatibilities: [NEXTCLOUD, STIRLING, PTERODACTYL, WAZUH, SCRIBBLE]
-    shared_services: [docker.service, nginx.service, postgresql.service]
-    ram:
-      observed_component_floor_gib: 0.2
-      planning_peak_gib: 2.3
-      minimum_practical_gib: 3
-      confidence: medium
-    cpu: low
-
+    requires: [docker.service, postgresql]
+    container: soc-forgejo-forgejo-1
+    healthchecks: [container-running, docker-health, http-local]
+    ram_baseline_mib: 193.2
+  NEXTCLOUD:
+    unit: powerseven-app-nextcloud.service
+    autostart: false
+    requires: [docker.service, postgresql, nextcloud-redis]
   STIRLING:
-    unit: powerseven-profile-stirling.service
+    unit: powerseven-app-stirling.service
     autostart: false
-    heavy: true
-    services: [powerseven-profile-stirling.service]
-    containers: [soc-stirling-stirling-1]
-    databases: []
-    dependencies: [CORE]
-    start_order: [CORE, soc-stirling-stirling-1, health-stirling]
-    stop_order: [soc-stirling-stirling-1]
-    healthchecks: [stirling]
-    ports: [127.0.0.1:8084/tcp, 443/tcp]
-    incompatibilities: [NEXTCLOUD, FORGEJO, PTERODACTYL, WAZUH, SCRIBBLE]
-    shared_services: [docker.service, nginx.service]
-    ram:
-      observed_component_floor_gib: 0.9
-      planning_peak_gib: 3.2
-      minimum_practical_gib: 3
-      confidence: medium
-    cpu: medium-high
-
-  PTERODACTYL:
-    unit: powerseven-profile-pterodactyl.service
-    autostart: false
-    heavy: true
-    services: [mariadb.service, redis-server.service, php8.3-fpm.service, pteroq.service, wings.service, powerseven-profile-pterodactyl.service]
-    containers: []
-    databases: [mariadb, redis]
-    dependencies: [CORE]
-    start_order: [CORE, mariadb.service, redis-server.service, php8.3-fpm.service, pteroq.service, wings.service, health-pterodactyl]
-    stop_order: [wings.service, pteroq.service, php8.3-fpm.service, redis-server.service, mariadb.service]
-    healthchecks: [pterodactyl]
-    ports: [127.0.0.1:8080/tcp, 2022/tcp, 443/tcp]
-    incompatibilities: [NEXTCLOUD, FORGEJO, STIRLING, WAZUH, SCRIBBLE]
-    shared_services: [docker.service, nginx.service]
-    runtime_note: two observed game containers each declare SERVER_MEMORY=2048; control-plane estimate excludes that allocation
-    ram:
-      observed_component_floor_gib: 0.3
-      control_plane_peak_gib: 1.8
-      one_2g_game_server_peak_gib: 4.0
-      two_2g_game_servers_peak_gib: 6.0
-      planning_peak_gib: 4.0
-      minimum_practical_gib: 4
-      confidence: medium
-    cpu: medium-high
-
-  WAZUH:
-    unit: powerseven-profile-wazuh.service
-    autostart: false
-    heavy: true
-    services: [filebeat.service, wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service, powerseven-profile-wazuh.service]
-    containers: []
-    databases: []
-    dependencies: [CORE]
-    start_order: [CORE, wazuh-indexer.service, filebeat.service, wazuh-manager.service, wazuh-dashboard.service, health-wazuh]
-    stop_order: [wazuh-dashboard.service, wazuh-manager.service, filebeat.service, wazuh-indexer.service]
-    healthchecks: [wazuh]
-    ports: [1514/tcp, 1515/tcp, 55000/tcp, 443/tcp]
-    incompatibilities: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, SCRIBBLE]
-    shared_services: [nginx.service]
-    runtime_note: agents may be disconnected while this profile is off
-    ram:
-      observed_component_floor_gib: 4.6
-      current_host_minimum_gib: 6
-      planning_peak_gib: 4.8
-      minimum_practical_gib: 4
-      confidence: low_until_heap_tuning_is_validated
-    cpu: high
-
-  PORTAL:
-    unit: azienda-portal.service
-    core_component: true
-    selectable: false
-    autostart: true
-    heavy: false
-    services: [postgresql.service, azienda-portal.service, powerseven-dashboard-health.service]
-    containers: []
-    databases: [postgresql]
-    dependencies: [CORE, id_ldap]
-    start_order: [CORE, postgresql.service, azienda-portal.service, health-portal]
-    stop_order: []
-    healthchecks: [portal]
-    ports: [127.0.0.1:5000/tcp, 443/tcp]
-    incompatibilities: []
-    shared_services: [docker.service, nginx.service, postgresql.service]
-    ram:
-      observed_component_floor_gib: 0.05
-      planning_peak_gib: 2.0
-      minimum_practical_gib: 3
-      confidence: medium
-    cpu: low
-
+    requires: [docker.service]
   SCRIBBLE:
-    unit: powerseven-profile-scribble.service
+    unit: powerseven-app-scribble.service
     autostart: false
-    heavy: false
-    services: [powerseven-profile-scribble.service]
-    containers: [scribble-1, scribble-2]
-    databases: []
-    dependencies: [CORE]
-    start_order: [CORE, scribble-1, scribble-2, health-scribble]
-    stop_order: [scribble-2, scribble-1]
-    healthchecks: [scribble]
-    ports: [127.0.0.1:8081/tcp, 127.0.0.1:8082/tcp, 443/tcp]
-    incompatibilities: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH]
-    shared_services: [docker.service, nginx.service]
-    ram:
-      observed_component_floor_gib: 0.06
-      planning_peak_gib: 1.8
-      minimum_practical_gib: 2
-      confidence: medium
-    cpu: low
+    requires: [docker.service]
+  PTERODACTYL:
+    unit: powerseven-app-pterodactyl.service
+    autostart: false
+    requires: [docker.service, mariadb.service, redis-server.service, php8.3-fpm.service, wings.service]
+  WAZUH:
+    unit: powerseven-app-wazuh.service
+    autostart: false
+    requires: [wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service, filebeat.service]
 
-  ALL-OFF-OPTIONAL:
-    unit: powerseven-stop-all-optional.service
-    autostart: true
-    heavy: false
-    services: [powerseven-stop-all-optional.service]
-    containers: []
-    databases: []
-    dependencies: [CORE]
-    start_order: [CORE, stop-optional, health-core]
-    stop_order: [stop-optional]
-    healthchecks: [all-off]
-    ports: []
-    incompatibilities: [NEXTCLOUD, FORGEJO, STIRLING, PTERODACTYL, WAZUH, SCRIBBLE]
-    shared_services: [wg-quick@wg0.service, ssh.socket, docker.service, nginx.service, postgresql.service, azienda-portal.service, powerseven-dashboard-health.service, powerseven-core-adguard.service, cockpit.socket, powerseven-core.target]
-    all_optional_stopped: true
-    ram:
-      observed_component_floor_gib: 0.6
-      planning_peak_gib: 2.0
-      minimum_practical_gib: 3
-      confidence: medium; dashboard and PostgreSQL are temporary CORE
-    cpu: low
+resource_baseline:
+  forgejo_container_mib: 193.2
+  postgresql_cluster_cgroup_mib: 47.7
+  nextcloud_app_container_mib: 177.0
+  nextcloud_cron_container_mib: 1.6
+  nextcloud_redis_container_mib: 9.1
+  docker_service_cgroup_mib: 201.3
+  host_memory_available_gib: 10.0
+  forgejo_postgresql_connections: 2
+  measured_at: 2026-09-26
+
+compatibility:
+  legacy_profile_units: retained_for_unmigrated_apps_only
+  forgejo_legacy_unit: removed
+  postgresql_aggregator: postgresql.service
+  postgresql_lifecycle_unit: postgresql@18-main.service
