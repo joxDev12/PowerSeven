@@ -57,9 +57,9 @@ components:
     restart_required: true
   scribble:
     current: "two Pterodactyl server_process containers, same biosmarcel/scribble.rs:v0.9.12 image, ports 8081/8082, no Docker healthcheck, 24.19+26.16 MiB cgroup, CPU idle 0.00%"
-    proposed: 'one controller-owned logical unit; direct docker start/stop of the two allowlisted containers; restart="no"; HTTP 200 health on both ports; do not stop Wings/Pterodactyl or shared services'
+    proposed: 'one controller-owned logical unit; lifecycle through the local Wings power API for the two fixed UUIDs; restart="no"; HTTP 200 health on both ports; do not stop Wings/Pterodactyl or shared services'
     estimated_ram_saving_gib: 0.0
-    risk: "Pterodactyl/Wings remains an external lifecycle owner; no standalone Scribble config or Compose project was found; controller handles only the two fixed container IDs"
+    risk: "Wings must be running; Wings 1.12.3 requires Panel reachability for a fresh server start, so the controller may bootstrap Panel dependencies temporarily; the node key remains root-only and is never stored in Git"
     reversible: true
     restart_required: false
   mariadb:
@@ -125,6 +125,20 @@ components:
     risk: "queue/daemon/game servers unavailable outside profile"
     reversible: true
     restart_required: false
+  pterodactyl-panel:
+    current: "MariaDB 145.6 MiB; Redis 8.6 MiB; PHP-FPM 11.9 MiB; pteroq 39.0 MiB; Laravel scheduler cron every minute"
+    proposed: "controller-owned panel unit; replace cron with disabled systemd timer; stop pteroq/PHP-FPM/shared DB/cache only when unreferenced"
+    estimated_ram_saving_gib: 0.20
+    risk: "panel and queue unavailable while OFF; external MariaDB/Redis clients block shutdown"
+    reversible: true
+    restart_required: true
+  pterodactyl-wings:
+    current: "Wings cgroup 23.7 MiB; Docker node runtime; pterodactyl_nw; server_process lifecycle external"
+    proposed: "separate controller-owned Wings unit; stop blocked by any running ContainerType=server_process container"
+    estimated_ram_saving_gib: 0.02
+    risk: "fresh start and server start require panel.lab.test DNS/HTTPS/HTTP reachability; an already-running Wings can stop server_process through its local API while Panel is OFF"
+    reversible: true
+    restart_required: true
   journald:
     current: "journal disk usage 29.7 MiB"
     proposed: "cap journal disk usage in the local image; do not trade away logs just for RAM"

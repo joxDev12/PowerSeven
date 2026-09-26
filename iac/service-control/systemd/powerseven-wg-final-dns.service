@@ -1,0 +1,17 @@
+[Unit]
+Description=PowerSeven split DNS for the unmanaged wg-final interface
+Requires=sys-subsystem-net-devices-wg\x2dfinal.device
+After=sys-subsystem-net-devices-wg\x2dfinal.device systemd-resolved.service
+BindsTo=sys-subsystem-net-devices-wg\x2dfinal.device
+Wants=systemd-resolved.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/resolvectl dns wg-final 10.10.10.13
+ExecStart=/usr/bin/resolvectl domain wg-final ~lab.test
+ExecStart=/usr/bin/resolvectl default-route wg-final no
+ExecStopPost=-/usr/bin/resolvectl revert wg-final
+
+[Install]
+WantedBy=sys-subsystem-net-devices-wg\x2dfinal.device

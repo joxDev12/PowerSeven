@@ -52,18 +52,14 @@ health() {
 stop_optional() {
     compose soc-cloud stop cron app redis || true
     compose soc-forgejo stop forgejo || true
-    /usr/bin/docker ps --filter label=Service=Pterodactyl -q | xargs -r /usr/bin/docker stop
-    /usr/bin/systemctl stop pteroq.service wings.service php8.3-fpm.service redis-server.service mariadb.service filebeat.service wazuh-dashboard.service wazuh-manager.service wazuh-indexer.service || true
+    /usr/bin/systemctl stop powerseven-app-pterodactyl-panel.service powerseven-app-pterodactyl-wings.service || true
+    /usr/bin/systemctl stop filebeat.service wazuh-dashboard.service wazuh-manager.service wazuh-indexer.service || true
 }
 
 stop_profile() {
     case "$1" in
         nextcloud) compose soc-cloud stop cron app redis ;;
         forgejo) compose soc-forgejo stop forgejo ;;
-        pterodactyl)
-            /usr/bin/docker ps --filter label=Service=Pterodactyl -q | xargs -r /usr/bin/docker stop
-            /usr/bin/systemctl stop wings.service pteroq.service php8.3-fpm.service redis-server.service mariadb.service || true
-            ;;
         wazuh) /usr/bin/systemctl stop wazuh-dashboard.service wazuh-manager.service filebeat.service wazuh-indexer.service ;;
         none|NONE|FAILED|CORE|all-off) : ;;
         *) echo "unsupported profile stop: $1" >&2; return 2 ;;
@@ -77,8 +73,6 @@ run_action() {
         nextcloud:stop) stop_profile nextcloud ;;
         forgejo:start) compose soc-forgejo up -d forgejo ;;
         forgejo:stop) stop_profile forgejo ;;
-        pterodactyl:start) : ;;
-        pterodactyl:stop) stop_profile pterodactyl ;;
         wazuh:start) : ;;
         wazuh:stop) stop_profile wazuh ;;
         dashboard:health) health dashboard ;;

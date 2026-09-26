@@ -130,7 +130,7 @@ mantiene attivo finché Forgejo o Nextcloud risultano applicazioni attive.
 | PTERODACTYL | MariaDB, Redis, PHP-FPM, pteroq, Wings | CORE → DB/cache → PHP → queue → Wings | Wings → queue → PHP → cache → DB | 8080 locale, 2022, 443 | DB/panel/Wings | 1.8 GiB control plane; 4 GiB con un server da 2 GiB |
 | WAZUH | Indexer, Filebeat, Manager, Dashboard | CORE → Indexer → Filebeat/Manager → Dashboard | Dashboard → Manager → Filebeat → Indexer | 1514, 1515, 55000, 443 | unità/API/UI | 5.0 GiB target; 4 GiB sperimentale |
 | PORTAL | componente CORE: Gunicorn 1 worker, dashboard health, AD bind | CORE → portal → health | mai tramite profilo optional | 5000 locale, 443 | HTTP 200 sempre disponibile | incluso in CORE |
-| SCRIBBLE | due container Scribble | CORE → scribble-1/2 | 2 → 1 | 8081/8082 locali, 443 | TCP 8081/8082 | 1.8 GiB |
+| SCRIBBLE | due Pterodactyl `server_process` | CORE → Wings → Wings local API → scribble-1/2 | 2 → 1 | 8081/8082 locali, 443 | Wings API + HTTP 200 su 8081/8082 | 1.8 GiB |
 | ALL-OFF-OPTIONAL | nessun optional | CORE → stop controller | tutti gli optional | solo CORE | CORE + dashboard HTTP 200 | 2.0 GiB peak |
 
 Le stime sono planning envelope, non somma cieca degli RSS. Si basano sui

@@ -93,7 +93,8 @@ concede soltanto `start`, `stop` e `restart` su:
 powerseven-app-nextcloud.service
 powerseven-app-forgejo.service
 powerseven-profile-stirling.service
-powerseven-profile-pterodactyl.service
+powerseven-app-pterodactyl-panel.service
+powerseven-app-pterodactyl-wings.service
 powerseven-profile-wazuh.service
 powerseven-profile-scribble.service
 powerseven-stop-all-optional.service

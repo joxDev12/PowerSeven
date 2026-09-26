@@ -12,6 +12,6 @@ VPS14 (`soc-server`, `10.10.10.14`) ospita il proxy, i container e i servizi cen
 | `wazuh.lab.test` | Wazuh Dashboard `127.0.0.1:8443` | Indexer e Manager locali | `systemctl status wazuh-dashboard wazuh-indexer`; guasto dashboard/indexer |
 | `wings.lab.test` | Wings `127.0.0.1:8080`, SFTP TCP 2022 | Pterodactyl; configurazione panel non verificata | `systemctl status wings`; guasto daemon/panel |
 | `login.lab.test` | `azienda-portal` Gunicorn `127.0.0.1:5000` | LDAP previsto; database non verificato | `systemctl status azienda-portal`; guasto processo/LDAP |
-| `scribble*.lab.test` | due container, `10.10.10.14:8081/8082` TCP/UDP | storage/autenticazione non verificati | `sudo docker ps`; guasto container/rete Docker |
+| `scribble*.lab.test` | due Pterodactyl `server_process`, `10.10.10.14:8081/8082` TCP/UDP | Wings local API; storage/autenticazione non verificati | `powerseven-app-scribble.service`; guasto Wings/server/rete Docker |
 
 La pubblicazione Internet effettiva dipende dall'Azure NSG e non è deducibile dal solo listener host: vedere [sicurezza](security.md). Vedere anche [diagramma servizi](../diagrams/vps14-services.html).

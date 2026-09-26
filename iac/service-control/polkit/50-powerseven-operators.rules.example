@@ -6,7 +6,8 @@ polkit.addRule(function(action, subject) {
         "powerseven-app-nextcloud.service",
         "powerseven-app-forgejo.service",
         "powerseven-app-stirling.service",
-        "powerseven-profile-pterodactyl.service",
+        "powerseven-app-pterodactyl-panel.service",
+        "powerseven-app-pterodactyl-wings.service",
         "powerseven-profile-wazuh.service",
         "powerseven-app-scribble.service",
         "powerseven-stop-all-optional.service"

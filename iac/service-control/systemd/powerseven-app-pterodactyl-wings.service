@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Pterodactyl Wings node runtime
+After=powerseven-core.target docker.service wg-quick@wg0.service
+Wants=powerseven-core.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller pterodactyl-wings start
+ExecStop=/usr/local/libexec/powerseven-controller pterodactyl-wings stop
+TimeoutStartSec=120s
+TimeoutStopSec=120s
+
+[Install]
+WantedBy=multi-user.target

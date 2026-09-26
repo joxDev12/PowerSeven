@@ -79,12 +79,56 @@ profiles:
       expected_status: 200
       command: curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8084/api/v1/info/status
 
-  pterodactyl:
+  pterodactyl-panel:
+    - id: mariadb
+      type: systemd
+      unit: mariadb.service
+      command: systemctl is-active --quiet mariadb.service
+    - id: redis
+      type: systemd
+      unit: redis-server.service
+      command: systemctl is-active --quiet redis-server.service
+    - id: php-fpm
+      type: systemd
+      unit: php8.3-fpm.service
+      command: systemctl is-active --quiet php8.3-fpm.service
+    - id: pteroq
+      type: systemd
+      unit: pteroq.service
+      command: systemctl is-active --quiet pteroq.service
+    - id: scheduler
+      type: systemd
+      unit: powerseven-pterodactyl-schedule.timer
+      command: systemctl is-active --quiet powerseven-pterodactyl-schedule.timer
     - id: panel
       type: http
-      url: https://127.0.0.1/
+      url: https://panel.lab.test/
       expected_status: [200, 302]
-      command: curl --fail --silent --show-error --insecure --resolve panel.lab.test:443:127.0.0.1 https://panel.lab.test/
+      command: curl --fail --silent --show-error --insecure --max-time 5 --resolve panel.lab.test:443:127.0.0.1 https://panel.lab.test/
+
+  pterodactyl-wings:
+    - id: docker
+      type: systemd
+      unit: docker.service
+      command: systemctl is-active --quiet docker.service
+    - id: network
+      type: docker-network
+      network: pterodactyl_nw
+      command: docker network inspect pterodactyl_nw
+    - id: wings
+      type: systemd
+      unit: wings.service
+      command: systemctl is-active --quiet wings.service
+    - id: api
+      type: http
+      url: http://127.0.0.1:8080/
+      expected_status: [200, 401, 404]
+      command: curl --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/
+    - id: panel-reachability-for-fresh-start
+      type: http
+      url: https://panel.lab.test/
+      expected_status: [200, 302]
+      command: getent hosts panel.lab.test && curl --fail --silent --show-error --insecure --max-time 5 https://panel.lab.test/
 
   wazuh:
     - id: indexer
@@ -93,6 +137,10 @@ profiles:
       command: systemctl is-active --quiet wazuh-indexer.service
 
   scribble:
+    - id: wings-control-plane
+      type: systemd
+      unit: wings.service
+      command: systemctl is-active --quiet wings.service
     - id: container-8081
       type: docker
       container: 8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5

@@ -36,12 +36,26 @@ applications:
     health: http://127.0.0.1:8084/api/v1/info/status
   SCRIBBLE:
     unit: powerseven-app-scribble.service
-    requires: [docker.service]
+    requires: [docker.service, wings.service]
     containers: [8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5, 548ab28c-0e73-4706-a894-959a2d1b76a1]
     health: [http://10.10.10.14:8081/, http://10.10.10.14:8082/]
-  PTERODACTYL:
-    unit: powerseven-app-pterodactyl.service
-    requires: [docker.service, mariadb.service, redis-server.service, php8.3-fpm.service, wings.service]
+    control_plane: wings_local_api
+    power_endpoint: /api/servers/<allowlisted-uuid>/power
+    panel_bootstrap: required_for_wings_or_server_start
+  PTERODACTYL_PANEL:
+    unit: powerseven-app-pterodactyl-panel.service
+    requires: [mariadb.service, redis-server.service, php8.3-fpm.service, pteroq.service]
+    core_requires: [nginx.service]
+    health: https://panel.lab.test/
+    scheduler: powerseven-pterodactyl-schedule.timer
+  PTERODACTYL_WINGS:
+    unit: powerseven-app-pterodactyl-wings.service
+    requires: [docker.service]
+    core_requires: [wg-quick@wg0.service]
+    health: http://127.0.0.1:8080/
+    network: pterodactyl_nw
+    protects: ContainerType=server_process
+    panel_reachability: required_for_fresh_start
   WAZUH:
     unit: powerseven-app-wazuh.service
     requires: [wazuh-indexer.service, wazuh-manager.service, wazuh-dashboard.service, filebeat.service]
@@ -49,7 +63,7 @@ applications:
 shared_dependencies:
   docker.service:
     class: core
-    consumers: [FORGEJO, NEXTCLOUD, STIRLING, SCRIBBLE, PTERODACTYL]
+    consumers: [FORGEJO, NEXTCLOUD, STIRLING, SCRIBBLE, PTERODACTYL_WINGS]
     stop_policy: never
   postgresql:
     class: shared
@@ -62,15 +76,15 @@ shared_dependencies:
     stop_policy: owned_by_nextcloud_stack
   mariadb.service:
     class: shared
-    consumers: [PTERODACTYL]
+    consumers: [PTERODACTYL_PANEL]
     stop_policy: stop_only_when_not_required
   redis-server.service:
     class: shared
-    consumers: [PTERODACTYL]
+    consumers: [PTERODACTYL_PANEL]
     stop_policy: stop_only_when_not_required
   php8.3-fpm.service:
     class: shared
-    consumers: [PTERODACTYL]
+    consumers: [PTERODACTYL_PANEL]
     stop_policy: stop_only_when_not_required
 
 controller:
@@ -79,7 +93,7 @@ controller:
   state_dir: /run/powerseven
   active_applications_source: systemd_and_docker_detection
   desired_state: union_of_application_requires
-  managed_dependencies: [docker.service, postgresql]
+  managed_dependencies: [docker.service, postgresql, mariadb.service, redis-server.service, php8.3-fpm.service, pteroq.service, wings.service]
   protected_core: true
   arbitrary_units: false
   arbitrary_compose_projects: false
@@ -87,3 +101,7 @@ controller:
 dependency_graph:
   cycles: forbidden
   postgresql_rule: "stop postgresql@18-main.service only when no active application requires it and no non-system PostgreSQL client remains"
+  mariadb_rule: "stop mariadb.service only when no active application requires it and no external MariaDB client remains"
+  redis_rule: "stop redis-server.service only when no active application requires it and no external Redis client remains"
+  php_fpm_rule: "php8.3-fpm.service is panel-exclusive after runtime discovery"
+  wings_rule: "never stop wings.service while a ContainerType=server_process container is running"

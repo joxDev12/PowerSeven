@@ -69,7 +69,7 @@ def main() -> int:
     if profiles.get("architecture", {}).get("dashboard", {}).get("postgres_dependency") != "none":
         fail("dashboard must have no PostgreSQL dependency")
 
-    app_names = {"FORGEJO", "NEXTCLOUD", "STIRLING", "SCRIBBLE", "PTERODACTYL", "WAZUH"}
+    app_names = {"FORGEJO", "NEXTCLOUD", "STIRLING", "SCRIBBLE", "PTERODACTYL_PANEL", "PTERODACTYL_WINGS", "WAZUH"}
     apps = dependencies.get("applications", {})
     if set(apps) != app_names or set(profiles.get("applications", {})) != app_names:
         fail("application catalog is incomplete")
@@ -110,8 +110,10 @@ def main() -> int:
     if not any(check.get("url") == "http://127.0.0.1:8084/api/v1/info/status" for check in stirling_checks):
         fail("Stirling HTTP healthcheck is missing")
     scribble_checks = healthchecks.get("profiles", {}).get("scribble", [])
-    if apps.get("SCRIBBLE", {}).get("requires") != ["docker.service"]:
-        fail("Scribble must require Docker only")
+    if apps.get("SCRIBBLE", {}).get("requires") != ["docker.service", "wings.service"]:
+        fail("Scribble must require Docker and Wings")
+    if not any(check.get("id") == "wings-control-plane" for check in scribble_checks):
+        fail("Scribble Wings control-plane healthcheck is missing")
     if {check.get("container") for check in scribble_checks if check.get("container")} != {
         "8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5", "548ab28c-0e73-4706-a894-959a2d1b76a1"
     }:
@@ -120,10 +122,31 @@ def main() -> int:
         "http://10.10.10.14:8081/", "http://10.10.10.14:8082/"
     }:
         fail("Scribble HTTP healthchecks are incomplete")
+    panel_checks = healthchecks.get("profiles", {}).get("pterodactyl-panel", [])
+    if apps.get("PTERODACTYL_PANEL", {}).get("requires") != [
+        "mariadb.service", "redis-server.service", "php8.3-fpm.service", "pteroq.service"
+    ]:
+        fail("Pterodactyl panel dependency declaration is incorrect")
+    if {check.get("unit") for check in panel_checks if check.get("unit")} < {
+        "mariadb.service", "redis-server.service", "php8.3-fpm.service", "pteroq.service",
+        "powerseven-pterodactyl-schedule.timer",
+    }:
+        fail("Pterodactyl panel healthchecks are incomplete")
+    if not any(check.get("url") == "https://panel.lab.test/" for check in panel_checks):
+        fail("Pterodactyl panel HTTP healthcheck is missing")
+    wings_checks = healthchecks.get("profiles", {}).get("pterodactyl-wings", [])
+    if apps.get("PTERODACTYL_WINGS", {}).get("requires") != ["docker.service"]:
+        fail("Pterodactyl Wings dependency declaration is incorrect")
+    if {check.get("unit") for check in wings_checks if check.get("unit")} < {"docker.service", "wings.service"}:
+        fail("Pterodactyl Wings systemd healthchecks are incomplete")
+    if not any(check.get("network") == "pterodactyl_nw" for check in wings_checks):
+        fail("Pterodactyl Wings network healthcheck is missing")
+    if not any(check.get("id") == "panel-reachability-for-fresh-start" for check in wings_checks):
+        fail("Pterodactyl Wings fresh-start panel reachability check is missing")
 
     components = optimization.get("components", {})
-    if "forgejo" not in components or "postgresql" not in components:
-        fail("optimization matrix must include Forgejo and PostgreSQL")
+    if "forgejo" not in components or "postgresql" not in components or "pterodactyl-panel" not in components:
+        fail("optimization matrix must include Forgejo, PostgreSQL, and Pterodactyl panel")
     if "restart" in str(compose) and any(spec.get("restart") not in (None, "no") for spec in compose.get("services", {}).values()):
         fail("local Compose target has a controller-bypassing restart policy")
 
@@ -133,6 +156,11 @@ def main() -> int:
         "powerseven-app-forgejo.service", "powerseven-app-nextcloud.service",
         "powerseven-app-stirling.service",
         "powerseven-app-scribble.service",
+        "powerseven-app-pterodactyl-panel.service",
+        "powerseven-app-pterodactyl-wings.service",
+        "powerseven-pterodactyl-schedule.service",
+        "powerseven-pterodactyl-schedule.timer",
+        "powerseven-wg-final-dns.service",
     }
     names = {path.name for path in systemd.iterdir()}
     if not required <= names:
@@ -145,6 +173,20 @@ def main() -> int:
         fail("legacy Stirling profile unit must not remain")
     if "powerseven-profile-scribble.service" in names:
         fail("legacy Scribble profile unit must not remain")
+    if "powerseven-profile-pterodactyl.service" in names:
+        fail("legacy Pterodactyl profile unit must not remain")
+    dns_unit = systemd / "powerseven-wg-final-dns.service"
+    dns_text = dns_unit.read_text(encoding="utf-8")
+    for required_dns_line in (
+        "resolvectl dns wg-final 10.10.10.13",
+        "resolvectl domain wg-final ~lab.test",
+        "resolvectl revert wg-final",
+        "sys-subsystem-net-devices-wg\\x2dfinal.device",
+    ):
+        if required_dns_line not in dns_text:
+            fail(f"wg-final split-DNS unit is missing: {required_dns_line}")
+    if any(forbidden in dns_text for forbidden in ("systemd/network", ".network", "networkctl")):
+        fail("wg-final split-DNS unit must not delegate the interface to systemd-networkd")
     core_unit = (systemd / "powerseven-core.target").read_text(encoding="utf-8")
     dashboard_unit = (systemd / "powerseven-dashboard-health.service").read_text(encoding="utf-8")
     if "postgresql.service" in core_unit or "postgresql.service" in dashboard_unit:
@@ -166,8 +208,28 @@ def main() -> int:
         fail("controller lacks Stirling lifecycle and health handling")
     if "scribble_health" not in controller or "start_scribble" not in controller or "stop_scribble" not in controller:
         fail("controller lacks Scribble lifecycle and health handling")
+    if "pterodactyl_panel_health" not in controller or "start_pterodactyl_panel" not in controller or "stop_pterodactyl_panel" not in controller:
+        fail("controller lacks Pterodactyl panel lifecycle and health handling")
+    if "active_server_processes" not in controller or "BLOCKED_BY_ACTIVE_SERVERS" not in controller:
+        fail("controller lacks Wings active-server protection")
+    if "start_pterodactyl_wings" not in controller or "stop_pterodactyl_wings" not in controller:
+        fail("controller lacks Pterodactyl Wings lifecycle handling")
+    if "BLOCKED_BY_PANEL_UNAVAILABLE" not in controller or "panel_runtime_reachable" not in controller:
+        fail("controller lacks Wings panel reachability precondition")
+    if "mariadb.service" not in controller or "redis-server.service" not in controller or "php8.3-fpm.service" not in controller:
+        fail("controller lacks Pterodactyl shared dependencies")
+    if not (systemd / "wings.service.d" / "powerseven.conf").exists():
+        fail("Wings controller-owned restart policy override is missing")
     if "postgresql.service" in controller:
         fail("controller contains ambiguous PostgreSQL aggregator reference")
+    if '"scribble": {"docker.service", WINGS}' not in controller:
+        fail("controller does not model Wings as a Scribble runtime dependency")
+    if "def scribble_power" not in controller or "/api/servers/{server}/power" not in controller:
+        fail("controller lacks the local Wings Scribble power API")
+    scribble_start = controller.split("def start_scribble", 1)[1].split("def stop_scribble", 1)[0]
+    scribble_stop = controller.split("def stop_scribble", 1)[1].split("def start_pterodactyl_scheduler", 1)[0]
+    if '"docker", "start"' in scribble_start or '"docker", "stop"' in scribble_stop:
+        fail("Scribble lifecycle must not directly start or stop Docker containers")
 
     if failures:
         print(f"SUMMARY: FAIL={len(failures)}")

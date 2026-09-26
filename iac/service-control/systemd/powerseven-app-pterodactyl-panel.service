@@ -1,0 +1,15 @@
+[Unit]
+Description=PowerSeven application: Pterodactyl panel control plane
+After=powerseven-core.target nginx.service
+Wants=powerseven-core.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/powerseven-controller pterodactyl-panel start
+ExecStop=/usr/local/libexec/powerseven-controller pterodactyl-panel stop
+TimeoutStartSec=180s
+TimeoutStopSec=150s
+
+[Install]
+WantedBy=multi-user.target

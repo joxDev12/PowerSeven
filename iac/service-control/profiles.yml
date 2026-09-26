@@ -73,17 +73,39 @@ applications:
   SCRIBBLE:
     unit: powerseven-app-scribble.service
     autostart: false
-    requires: [docker.service]
+    requires: [docker.service, wings.service]
     containers: [8fe0a128-6fb0-44ad-b6da-a7a83a1c44b5, 548ab28c-0e73-4706-a894-959a2d1b76a1]
     healthchecks: [container-8081, container-8082, http-8081, http-8082]
+    control_plane: wings_local_api
+    panel_bootstrap: required_for_wings_or_server_start
     restart_policy: "no"
     image_version: "v0.9.12"
     owner: pterodactyl_server_process
     ram_baseline_mib: 50.35
-  PTERODACTYL:
-    unit: powerseven-app-pterodactyl.service
+  PTERODACTYL_PANEL:
+    unit: powerseven-app-pterodactyl-panel.service
     autostart: false
-    requires: [docker.service, mariadb.service, redis-server.service, php8.3-fpm.service, wings.service]
+    requires: [mariadb.service, redis-server.service, php8.3-fpm.service, pteroq.service]
+    core_requires: [nginx.service]
+    scheduler: powerseven-pterodactyl-schedule.timer
+    healthchecks: [mariadb, redis, php-fpm, pteroq, scheduler, panel-http]
+    restart_policy: "no"
+    panel_root: /var/www/pterodactyl
+    panel_db: panel
+    queue_backend: redis-server.service
+    session_cache_backend: redis-server.service
+    php_fpm_classification: exclusive_panel_consumer
+  PTERODACTYL_WINGS:
+    unit: powerseven-app-pterodactyl-wings.service
+    autostart: false
+    requires: [docker.service]
+    core_requires: [wg-quick@wg0.service]
+    healthchecks: [docker, network, wings-api]
+    restart_policy: "no"
+    network: pterodactyl_nw
+    server_process_guard: ContainerType=server_process
+    panel_dependency: optional_runtime_reachability
+    fresh_start_requires: panel.lab.test_dns_https_and_http
   WAZUH:
     unit: powerseven-app-wazuh.service
     autostart: false
@@ -95,6 +117,12 @@ resource_baseline:
   nextcloud_app_container_mib: 177.0
   nextcloud_cron_container_mib: 1.6
   nextcloud_redis_container_mib: 9.1
+  pterodactyl_mariadb_cgroup_mib: 145.6
+  pterodactyl_redis_cgroup_mib: 8.6
+  pterodactyl_php_fpm_cgroup_mib: 11.9
+  pterodactyl_pteroq_cgroup_mib: 39.0
+  pterodactyl_wings_cgroup_mib: 23.7
+  pterodactyl_server_process_total_mib: 52.35
   docker_service_cgroup_mib: 201.3
   host_memory_available_gib: 10.0
   forgejo_postgresql_connections: 2
@@ -105,3 +133,4 @@ compatibility:
   forgejo_legacy_unit: removed
   postgresql_aggregator: postgresql.service
   postgresql_lifecycle_unit: postgresql@18-main.service
+  pterodactyl_cron_replaced_by: powerseven-pterodactyl-schedule.timer

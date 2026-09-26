@@ -1,0 +1,11 @@
+[Unit]
+Description=PowerSeven Pterodactyl scheduler timer
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+Persistent=false
+Unit=powerseven-pterodactyl-schedule.service
+
+[Install]
+WantedBy=timers.target
