@@ -17,9 +17,9 @@ wireguard_migration:
   acceptance_id: WG-03
   execution: not_in_this_task
 dns_bootstrap:
-  initial_resolver: 192.168.214.2
+  initial_resolvers: [1.1.1.1, 8.8.8.8]
   final_resolver: 192.168.214.13
-  dc02_forwarder_initial: 192.168.214.2
+  dc02_forwarders_initial: [1.1.1.1, 8.8.8.8]
   dc02_forwarder_final: 192.168.214.14
   switch_after: app_adguard
 service_control:
@@ -114,7 +114,7 @@ services:
     name: DNS
     ports: [53/tcp, 53/udp]
     depends_on: [id_ad_ds]
-    forwards_to_initial: [192.168.214.2]
+    forwards_to_initial: [1.1.1.1, 8.8.8.8]
     forwards_to_final: [app_adguard]
     bootstrap_rule: keep_external_forwarder until app_adguard passes DNS health check
     persistent: true

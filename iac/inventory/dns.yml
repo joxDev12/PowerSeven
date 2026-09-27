@@ -4,8 +4,8 @@ scope:
   source_current: azure_reference
   target_local: vmware_rebuild
 bootstrap:
-  temporary_resolver: 192.168.214.2
-  dc02_forwarder_initial: 192.168.214.2
+  temporary_resolvers: [1.1.1.1, 8.8.8.8]
+  dc02_forwarders_initial: [1.1.1.1, 8.8.8.8]
   adguard_address: 192.168.214.14
   dc02_forwarder_final: 192.168.214.14
   switch_condition: app_adguard_health_check_passed
@@ -83,20 +83,20 @@ zones:
     target_state: create_only_records_needed_by_new_lab
 resolver_chain:
   - client: vps12
-    resolver_initial: 192.168.214.2
+    resolver_initial: [1.1.1.1, 8.8.8.8]
     resolver_final: 192.168.214.13
     purpose: domain_and_internal_dns
   - client: vps13
-    resolver_initial: 192.168.214.2
-    resolver_final: 127.0.0.1
-    forwarder_initial: 192.168.214.2
+    resolver_initial: [1.1.1.1, 8.8.8.8]
+    resolver_final: [192.168.214.13]
+    forwarder_initial: [1.1.1.1, 8.8.8.8]
     forwarder_final: 192.168.214.14
   - client: id_dns_dc02
-    forwarder_initial: 192.168.214.2
+    forwarder_initial: [1.1.1.1, 8.8.8.8]
     forwarder_final: 192.168.214.14
     state: target_bootstrap_then_final
   - client: vps14
-    resolver_initial: 192.168.214.2
+    resolver_initial: [1.1.1.1, 8.8.8.8]
     resolver_final: 192.168.214.13
   - client: app_adguard
     upstream: internet

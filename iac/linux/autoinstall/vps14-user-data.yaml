@@ -29,6 +29,6 @@ autoinstall:
           - to: default
             via: 192.168.214.2
         nameservers:
-          addresses: [192.168.214.2]
+          addresses: [1.1.1.1, 8.8.8.8]
   late-commands:
     - curtin in-target --target=/target -- systemctl disable --now apt-daily-upgrade.timer

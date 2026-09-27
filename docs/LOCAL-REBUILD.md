@@ -74,39 +74,70 @@ provisiona VM o host automaticamente.
 - **Comandi previsti:** autoinstall usa i file
   `iac/linux/autoinstall/vps12-user-data.yaml` e
   `iac/linux/autoinstall/vps14-user-data.yaml`; su Windows il dry-run reale è
-  `pwsh -NoProfile -File iac/windows/bootstrap.ps1`.
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File iac/windows/bootstrap.ps1 -Check`.
 - **Prerequisiti:** PHASE 2 PASS; placeholder risolti in workspace locale;
   password e chiavi fuori Git.
 - **Risultato atteso:** Ubuntu Desktop/Server e Windows Server 2022 Desktop
   Experience installati con hostname e SSH/OpenSSH iniziali.
-- **Stato:** **PARTIAL**. I template esistono, ma non esiste un renderer Linux,
-  un installer ISO orchestrato o un bootstrap Windows completo; la promozione
-  AD è esplicitamente esclusa dallo script.
+- **Stato:** **PARTIAL**. I template Linux non hanno ancora renderer/installer
+  orchestrato; il bootstrap Windows è invece disponibile a checkpoint, ma non è
+  stato eseguito su VPS13 live da questa macchina.
 
 ### PHASE 4 — rete/IP underlay
 
 - **Modalità:** manuale/partially automatizzabile.
 - **Comandi previsti:** su Linux verificare `ip addr` e `ip route`; su Windows
-  `Get-NetIPConfiguration`. Non esiste ancora un apply idempotente repository.
+  il checkpoint VPS13 usa `bootstrap.ps1 -Apply -Checkpoint 2`, mentre
+  `Get-NetIPConfiguration` resta la verifica manuale. Linux non ha ancora un
+  apply idempotente repository.
 - **Prerequisiti:** OS installato; VMnet8/gateway validati.
 - **Risultato atteso:** `.12/.13/.14` statici su `192.168.214.0/24`, gateway
-  `.2`, DNS temporaneo `.2`; nessun conflitto con LAN o bridge Docker.
+  `.2`, DNS bootstrap `1.1.1.1`/`8.8.8.8`; nessun conflitto con LAN o bridge
+  Docker.
 - **Stato:** **PARTIAL**. Gli indirizzi sono dichiarati in YAML/autoinstall e
   nel bootstrap PowerShell, ma l'interfaccia reale resta da selezionare.
 
 ### PHASE 5 — VPS13 AD/DNS
 
-- **Modalità:** manuale con automazione futura.
-- **Comandi previsti:** dry-run Windows di PHASE 3; dopo l'installazione i
-  controlli previsti sono `Get-ADDomain`, `Get-DnsServerZone`,
-  `Resolve-DnsName` e `klist`.
+- **Modalità:** automatizzabile a checkpoint su VPS13; reboot manuali.
+- **Comandi reali, da PowerShell Administrator su VPS13:**
+  `.\bootstrap.ps1 -Check`, poi `.\bootstrap.ps1 -Apply -Checkpoint 1` fino a
+  `7`; dopo ogni reboot si riprende dal checkpoint indicato. La validazione
+  finale è `.\validate-vps13.ps1`.
 - **Prerequisiti:** VPS13 con rete underlay; secret DSRM/domain admin forniti
   localmente.
-- **Risultato atteso:** nuovo forest `LAB.TEST`, DNS, Kerberos, LDAP/LDAPS,
-  Global Catalog, utenti/gruppi minimi e forwarder temporaneo VMware.
-- **Stato:** **MISSING** per provisioning riproducibile. `ad_ds` e `dns` sono
-  role contract; `bootstrap.ps1` installa i ruoli ma non promuove il DC e non
-  crea utenti, gruppi, zone o record.
+- **Risultato atteso:** nuovo forest `LAB.TEST`, DNS, Kerberos, LDAP,
+  Global Catalog, utenti/gruppi minimi e forwarder Internet iniziale
+  `1.1.1.1`/`8.8.8.8`.
+- **Stato:** **PARTIAL / NEEDS_LIVE_TEST**. `bootstrap.ps1` rileva lo stato,
+  installa AD DS/DNS, promuove una nuova forest senza seconda promozione,
+  configura DNS, utenti/gruppi e record in modo idempotente. La verifica
+  reale richiede ancora una VPS13 Windows.
+
+#### Checkpoint VPS13
+
+| Checkpoint | Automatico | Manuale/reboot | Verifica |
+|---|---|---|---|
+| 1 base Windows | OS, Datacenter, Desktop Experience, OpenSSH, PSRemoting | nessun reboot normalmente | `bootstrap.ps1 -Check -Checkpoint 1` |
+| 2 hostname/rete | `DC02`, `192.168.214.13/24`, gateway `192.168.214.2`, DNS bootstrap `1.1.1.1`/`8.8.8.8` | reboot manuale dopo Rename-Computer; passare `-InterfaceAlias` se necessario | `Get-NetIPConfiguration` |
+| 3 AD DS install | feature AD DS + DNS | se restituisce `REBOOT_REQUIRED`: reboot, rieseguire checkpoint 3 | `Get-WindowsFeature` |
+| 4 forest/domain | nuova forest `LAB.TEST`, NetBIOS `LAB` | DSRM con prompt SecureString; reboot manuale dopo promozione | `Get-ADDomain`, `Get-ADForest` |
+| 5 DNS | zona AD-integrated, `_msdcs`, forwarder `1.1.1.1`/`8.8.8.8`, client `192.168.214.13` | nessun reboot previsto | `Get-DnsServerZone`, `Get-DnsServerForwarder` |
+| 6 gruppi/utenti | gruppi automatici; utenti definiti dall'installatore | password solo prompt interattivo | `Get-ADUser`, `Get-ADGroup` |
+| 7 record | record A dichiarati, senza duplicare quelli corretti | nessun reboot | `Get-DnsServerResourceRecord` |
+| 8 validation | nessuna modifica | nessun reboot | `validate-vps13.ps1` |
+
+`-Apply -Checkpoint 8` è rifiutato intenzionalmente: la validation è sempre
+read-only. Il workflow non promuove una macchina già DC o già appartenente a un
+dominio diverso.
+
+Checkpoint 6 crea automaticamente solo i quattro gruppi PowerSeven. Il file
+tracciato `iac/windows/users.psd1` contiene `Users = @()`: nessun account
+personale è incluso nel clone. `-Apply -Checkpoint 6` chiede oggi all'installatore
+se vuole creare utenti e raccoglie nome, cognome, username, gruppi e password
+interattivamente. La funzione `Ensure-PowerSevenUser` è separata dalla UI e può
+essere riusata da un runner futuro con un `users.local.psd1` ignorato da Git;
+le password non vengono versionate.
 
 ### PHASE 6 — VPS14 servizi base
 
@@ -179,7 +210,7 @@ provisiona VM o host automaticamente.
 |---|---|---|
 | `iac/vmware/` | A + B | `preflight-host` e `validate-vms` sono read-only eseguibili; YAML e path example sono dichiarativi. Creazione VM intenzionalmente assente. |
 | `iac/linux/` | B/C | autoinstall e variables sono template con placeholder; README dichiara che non vengono applicati automaticamente. |
-| `iac/windows/` | A parziale + B/C | `bootstrap.ps1` ha dry-run/apply, `autounattend.xml` è input installer; AD promotion e provisioning identity mancano. |
+| `iac/windows/` | A parziale + B | `bootstrap.ps1` implementa checkpoint 1-8 e `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Esecuzione live non ancora verificata. |
 | `iac/ansible/` | A limitata + B/C | playbook e inventory sono invocabili come struttura; `check.yml` è un check contract; solo `roles/wazuh_server/tasks/main.yml` contiene task reali, gli altri role sono README. |
 | `iac/docker/` | B/C | Compose è dichiarativo e usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi live. |
 | `iac/service-control/` | A runtime/static + B | controller Python e validator sono eseguibili; unità systemd e YAML sono template di installazione, non un installer. |
@@ -193,12 +224,12 @@ provisiona VM o host automaticamente.
 |---|---|---|---|
 | VM VMware | GUI + validator read-only | nessun create API, per scelta | checklist GUI e usare `validate-vms` |
 | Ubuntu bootstrap | autoinstall template | renderer/seed e post-bootstrap apply | renderer minimo per placeholder, poi test su VM |
-| Windows provisioning | unattend + script rete/ruoli | promozione AD, DNS, utenti/gruppi, firewall completo | playbook/script checkpoint per DC02 |
+| Windows provisioning | workflow PowerShell checkpoint 1-8 | test live, integrazione Ansible e firewall policy completa | eseguire su VPS13 e poi wrapper Ansible |
 | Ansible | inventory/playbook/contratti | task per tutti i role eccetto tuning Wazuh | implementare un role per checkpoint |
 | Docker Compose | servizi dichiarati, `restart: no` | tag approvati, `.env`, cron Nextcloud, config/volumi live | chiudere immagini e deployment per app |
 | CA/TLS | riferimenti e contratti | generazione CA/certificati e trust | generatore locale escluso da Git |
-| AD users/groups | documentati | creazione idempotente | script PowerShell/Ansible con secret interattivi |
-| DNS records | `iac/inventory/dns.yml` | apply su DC02/AdGuard | role DNS dopo AD PASS |
+| AD users/groups | gruppi automatici + utenti interattivi al checkpoint 6 | test live; manifest locale non ancora orchestrato | eseguire checkpoint 6; mantenere password interattive |
+| DNS records | `iac/windows/provisioning.psd1` + checkpoint 5/7 | test live; forwarder finale AdGuard resta successivo | eseguire checkpoint 5/7 e validatore |
 | service-control | controller/unit/validator | installazione idempotente e naming locale | installer per sole unit allowlisted |
 | dashboard | servizio/health/runtime AD-only descritti | provisioning sorgente/config/Nginx | role dashboard senza PostgreSQL |
 | Wazuh | tuning Indexer reale; altri contratti | package/TLS/Manager/Dashboard/agent | role incrementali fresh-install |
@@ -221,7 +252,7 @@ locali restano in `iac/vmware/*.local.yml` o nel file ignorato
 
 1. chiudere decisioni versioni/ISO e validare le tre VM;
 2. completare bootstrap OS e underlay statico;
-3. implementare DC02 AD/DNS con checkpoint promozione e identity;
+3. eseguire e validare DC02 AD/DNS con i checkpoint PowerShell;
 4. implementare VPS14 base, AdGuard, Docker, database e CA;
 5. implementare WireGuard/DNS finale e trust;
 6. implementare un'applicazione per volta: dashboard, Forgejo, Nextcloud,

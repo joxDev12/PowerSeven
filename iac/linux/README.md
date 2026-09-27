@@ -6,7 +6,8 @@ solo template e variabili: nessun file viene applicato automaticamente.
 ## Contratto
 
 - hostname e rete statica underlay sono definiti nei template per VM;
-- DNS iniziale è il gateway VMware `192.168.214.2`;
+- DNS iniziale è `1.1.1.1`/`8.8.8.8`; il gateway VMware `192.168.214.2` è
+  usato solo per il routing;
 - SSH è installato come superficie di bootstrap, con chiave esterna;
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - WireGuard, dominio, Docker e applicazioni arrivano dopo il bootstrap via

@@ -6,7 +6,7 @@ overlay_cidr: 10.10.10.0/24
 dc02_underlay_ip: 192.168.214.13
 adguard_underlay_ip: 192.168.214.14
 application_service_ip: 10.10.10.14
-temporary_dns: 192.168.214.2
+temporary_dns: [1.1.1.1, 8.8.8.8]
 final_linux_dns: 192.168.214.13
 secret_refs:
   domain_admin_password: REQUIRED_SECRET

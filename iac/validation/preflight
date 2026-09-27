@@ -158,6 +158,21 @@ def check_secrets():
         report("PASS", "inline-secret", "no private key or inline credential value")
 
 
+def check_user_provisioning_template():
+    path = IAC / "windows" / "users.psd1"
+    if not path.is_file():
+        report("FAIL", "user-template", "tracked iac/windows/users.psd1 is missing")
+        return
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"\bUsers\s*=\s*@\((.*?)\)", text, re.DOTALL)
+    if match is None:
+        report("FAIL", "user-template", "users.psd1 must declare Users = @(...) explicitly")
+    elif match.group(1).strip():
+        report("FAIL", "user-template", "tracked users.psd1 must contain no installer-specific accounts; use users.local.psd1")
+    else:
+        report("PASS", "user-template", "tracked users.psd1 contains no installer-specific accounts")
+
+
 def check_decisions():
     matches = []
     for path, text in read_text_files():
@@ -309,6 +324,7 @@ def main() -> int:
     check_graph_references(inventories, graph)
     check_ip_and_cidr(by_name["hosts.yml"], by_name["networks.yml"])
     check_secrets()
+    check_user_provisioning_template()
     check_decisions()
     dependencies = load_yaml(IAC / "ansible" / "dependency-map.yml")
     check_dependency_cycles(dependencies)

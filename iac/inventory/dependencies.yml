@@ -37,7 +37,7 @@ provisioning_order:
     parallel: true
     provides: [os_vps12, os_vps13, os_vps14]
     requires: [vm_vps12, vm_vps13, vm_vps14]
-    dns: 192.168.214.2
+    bootstrap_dns: [1.1.1.1, 8.8.8.8]
   - order: 3
     phase: local_underlay_and_bootstrap_dns
     parallel: true
@@ -48,7 +48,7 @@ provisioning_order:
     parallel: false
     provides: [id_ad_ds, id_dns_dc02, id_kerberos, id_ldap, id_global_catalog]
     requires: [underlay_vps13, bootstrap_dns]
-    forwarder: 192.168.214.2
+    forwarders: [1.1.1.1, 8.8.8.8]
   - order: 5
     phase: vps14_base_and_adguard
     parallel: false
@@ -154,7 +154,7 @@ dependency_classes:
   dns_bootstrap:
     - source: id_dns_dc02
       phase: initial
-      forwarder: 192.168.214.2
+      forwarders: [1.1.1.1, 8.8.8.8]
     - source: id_dns_dc02
       phase: final
       forwarder: app_adguard

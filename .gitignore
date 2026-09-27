@@ -7,3 +7,5 @@ iac/vmware/*.local.env
 iac/docker/.env
 iac/ansible/*.local.yml
 iac/ansible/*.vault.yml
+iac/windows/secrets.psd1
+iac/windows/*.local.psd1

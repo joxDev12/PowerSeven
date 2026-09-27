@@ -1,12 +1,18 @@
 schema_version: 1
 scope: bootstrap_only
+source_of_truth:
+  provisioning_declaration: provisioning.psd1
+  users_declaration: users.psd1
+  secret_manifest_example: secrets.example.psd1
+  apply_script: bootstrap.ps1
+  validator: validate-vps13.ps1
 hostname: DC02
 underlay:
   address: 192.168.214.13
   prefix_length: 24
   gateway: 192.168.214.2
-  bootstrap_dns: 192.168.214.2
-  final_dns: 127.0.0.1
+  bootstrap_dns: [1.1.1.1, 8.8.8.8]
+  final_dns: [192.168.214.13]
 domain:
   fqdn: LAB.TEST
   netbios: LAB
