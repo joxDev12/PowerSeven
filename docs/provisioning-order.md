@@ -29,7 +29,8 @@ non usate; nessun comando IaC esegue questa operazione.
 
 ## PHASE 2 — bootstrap OS
 
-Installare in parallelo Ubuntu Desktop, Windows Server 2022 e Ubuntu Server.
+Installare in parallelo Ubuntu Desktop 24.04.x, Windows Server 2022 Datacenter
+Desktop Experience e Ubuntu Server 24.04.x.
 Impostare hostname, account tecnici, SSH/OpenSSH dove previsto, timezone e
 updates secondo policy futura. DNS temporaneo: `192.168.214.2`.
 

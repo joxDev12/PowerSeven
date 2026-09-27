@@ -1,6 +1,6 @@
 # Active Directory
 
-DC02 è Windows Server 2022 Datacenter, host `10.10.10.13`, unico controller rilevato di `LAB.TEST`/`lab.test`. AD DS e DNS sono installati; DC02 detiene tutti i ruoli FSMO e il dominio è in modalità Windows Server 2016. AD è la dipendenza di identità per VPS12 e, secondo la topologia prevista, per LDAP di Nextcloud, Forgejo e portale; la configurazione LDAP delle singole app non è verificata.
+DC02 è Windows Server 2022 Datacenter, host `10.10.10.13`, unico controller rilevato di `LAB.TEST`/`lab.test`. AD DS e DNS sono installati; DC02 detiene tutti i ruoli FSMO e il dominio è in modalità Windows Server 2016. AD è la dipendenza di identità per VPS12 e per le integrazioni LDAP previste di Nextcloud e Forgejo. La dashboard `azienda-portal` usa invece direct user bind AD; la configurazione LDAP delle singole app resta da verificare nel rebuild locale.
 
 | Ruolo | Porta/protocollo osservato | Dipendenza e failure mode | Verifica read-only |
 |---|---|---|---|

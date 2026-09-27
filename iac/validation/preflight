@@ -132,19 +132,25 @@ def check_ip_and_cidr(hosts, networks):
 
 
 def check_secrets():
-    secret_pattern = re.compile(
+    data_pattern = re.compile(
         r"-----BEGIN .*PRIVATE KEY-----|"
         r"(?:password|passwd|(?<![A-Za-z])token|api[_-]?key|private[_-]?key)\s*[:=]\s*"
         r"(?!(?:[\"']?REQUIRED_SECRET|[\"']?REQUIRED_DECISION|[\"']?<|[\"']?\$\{|[\"']?not in repository))"
         r"(?:[\"'][^\"']+[\"']|[^#\s]+)",
         re.IGNORECASE,
     )
+    code_pattern = re.compile(
+        r"(?:password|passwd|token|api[_-]?key|private[_-]?key)\s*[:=]\s*"
+        r"(?P<quote>[\"'])(?!(?:REQUIRED_SECRET|REQUIRED_DECISION|<))[^\"']+?(?P=quote)",
+        re.IGNORECASE,
+    )
     matches = []
     for path, text in read_text_files():
         if path == Path(__file__):
             continue
+        pattern = code_pattern if path.suffix.lower() in {".py", ".ps1", ".sh"} else data_pattern
         for line_number, line in enumerate(text.splitlines(), 1):
-            if secret_pattern.search(line):
+            if pattern.search(line):
                 matches.append(f"{path.relative_to(ROOT)}:{line_number}")
     if matches:
         report("FAIL", "inline-secret", ", ".join(matches[:8]))
@@ -219,7 +225,7 @@ def check_ports(services):
 def check_vm_resources(vms):
     entries = vms["vms"]
     totals = {key: sum(int(vm[key]) for vm in entries) for key in ("vcpu", "memory_gib", "disk_gib")}
-    expected = {"vcpu": 8, "memory_gib": 11, "disk_gib": 320}
+    expected = {"vcpu": 8, "memory_gib": 10, "disk_gib": 260}
     if len(entries) != 3 or totals != expected:
         report("FAIL", "vm-resources", f"got {len(entries)} VMs and totals {totals}, expected {expected}")
     else:

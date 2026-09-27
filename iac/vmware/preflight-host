@@ -99,10 +99,10 @@ else
   available_kib=$(df -Pk "$storage_root" | awk 'NR==2 {print $4}')
   if [[ "$available_kib" =~ ^[0-9]+$ ]]; then
     available_gib=$((available_kib / 1024 / 1024))
-    if (( available_gib >= 320 )); then
-      say PASS storage-space "$available_gib GiB available; 320 GiB target capacity"
+    if (( available_gib >= 260 )); then
+      say PASS storage-space "$available_gib GiB available; 260 GiB target capacity"
     else
-      say FAIL storage-space "$available_gib GiB available; 320 GiB required"
+      say FAIL storage-space "$available_gib GiB available; 260 GiB required"
     fi
   else
     say FAIL storage-space 'df result unavailable'

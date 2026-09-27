@@ -196,7 +196,8 @@ services:
     systemd_unit: postgresql@18-main.service
     version_observed: "18.6"
     listen: [127.0.0.1:5432, 10.10.10.14:5432]
-    databases: [azienda_lab, forgejo, nextcloud, postgres]
+    databases: [forgejo, nextcloud, postgres]
+    observed_legacy_databases: [azienda_lab]
     persistent: true
     core_current: false
     core_reason: shared_dependency_for_forgejo_and_nextcloud
@@ -296,8 +297,7 @@ services:
     unit: azienda-portal
     execution_model: host_gunicorn
     listen: [127.0.0.1:5000]
-    depends_on: [id_ldap, db_postgresql]
-    database: azienda_lab
+    depends_on: [id_ldap]
     core: true
     dashboard: true
     profile_role: CORE_component_not_optional_profile

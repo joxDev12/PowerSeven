@@ -116,7 +116,7 @@ components:
     restart_required: false
   gunicorn-portal:
     current: "one worker; cgroup 45 MiB; PSS 48 MiB"
-    proposed: "CORE dashboard; retain one worker and health check; future AD/LDAP redesign may remove database use"
+    proposed: "CORE AD-only dashboard; retain one worker and health check; no PostgreSQL runtime dependency"
     estimated_ram_saving_gib: 0.0
     risk: "dashboard is unavailable if the CORE service fails"
     reversible: true

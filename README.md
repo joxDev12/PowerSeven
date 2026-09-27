@@ -84,7 +84,10 @@ VPS14 concentra il livello applicativo del laboratorio. Nginx espone i servizi `
 
 ## Dati e monitoraggio
 
-PostgreSQL 18 ospita i database principali di Nextcloud, Forgejo e del portale; MariaDB supporta Pterodactyl e Redis viene utilizzato come servizio di cache/queue dove previsto.
+PostgreSQL 18 ospita i database principali di Nextcloud e Forgejo; la
+dashboard `azienda-portal` è AD-only e non richiede PostgreSQL a runtime.
+MariaDB supporta Pterodactyl e Redis viene utilizzato come servizio di
+cache/queue dove previsto.
 
 Wazuh è centralizzato su VPS14 con Manager, Indexer e Dashboard. VPS12 e DC02 inviano la telemetria al Manager tramite la rete WireGuard.
 
@@ -146,6 +149,7 @@ Wazuh è centralizzato su VPS14 con Manager, Indexer e Dashboard. VPS12 e DC02 i
 | Architettura locale | [docs/local-architecture.md](docs/local-architecture.md) |
 | Ordine provisioning | [docs/provisioning-order.md](docs/provisioning-order.md) |
 | Guida rebuild locale | [docs/local-rebuild-guide.md](docs/local-rebuild-guide.md) |
+| Rebuild locale — entry point | [docs/LOCAL-REBUILD.md](docs/LOCAL-REBUILD.md) |
 | Test accettazione locale | [docs/local-acceptance-tests.md](docs/local-acceptance-tests.md) |
 
 ## Struttura repository

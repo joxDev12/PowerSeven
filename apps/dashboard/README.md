@@ -13,5 +13,6 @@ negotiation, so the lab overlay LDAP endpoint is used temporarily. The code
 keeps certificate validation enabled if `LDAP_URL` is later changed to LDAPS.
 
 PostgreSQL is not imported, configured, or contacted by this application.
-`azienda_lab` is retained because it contains non-identity data (`inventario`,
-`sedi`, and `ticket`).
+The observed Azure `azienda_lab` database is retained there because it contains
+non-identity data (`inventario`, `sedi`, and `ticket`); it is not restored or
+created by the fresh local rebuild.

@@ -1,7 +1,7 @@
 # Windows bootstrap e identity configuration
 
-Target: Windows Server 2022 VPS13/DC02. I file sono template e non vengono
-eseguiti in questa fase.
+Target: Windows Server 2022 Datacenter Desktop Experience VPS13/DC02. I file
+sono template e non vengono eseguiti in questa fase.
 
 - `autounattend.xml`: installazione iniziale e hostname;
 - `bootstrap.ps1`: rete underlay, DNS bootstrap, OpenSSH/WinRM e ruoli AD DS/DNS;

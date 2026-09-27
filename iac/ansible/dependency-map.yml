@@ -23,7 +23,7 @@ roles:
   pterodactyl_panel: {requires: [common_linux, mariadb]}
   wings: {requires: [common_linux, docker, pterodactyl_panel, wireguard_linux]}
   pteroq: {requires: [common_linux, pterodactyl_panel, wings]}
-  portal: {requires: [common_linux, postgresql]}
+  portal: {requires: [common_linux]}
   scribble: {requires: [docker, nginx]}
   wazuh_server: {requires: [common_linux, wireguard_linux]}
   xrdp: {requires: [common_linux, sssd]}

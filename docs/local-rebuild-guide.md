@@ -1,5 +1,9 @@
 # Guida completa rebuild locale
 
+> Entry point aggiornato: [LOCAL-REBUILD.md](LOCAL-REBUILD.md). Questa guida
+> conserva i dettagli operativi estesi; se un valore diverge, prevale l'entry
+> point e la specifica in `iac/vmware/vm-definitions.yml`.
+
 Guida per partire da Workstation installato, ISO disponibili, repository
 clonato e zero VM PowerSeven. Non usa snapshot, backup o dati Azure.
 
@@ -38,7 +42,7 @@ Secret fuori repository:
 **Prerequisiti:** Workstation installato; repository clonato.
 
 **Azioni:** verificare VMware Workstation Pro, capacità thin raccomandata di
-320 GiB sotto `<VM_STORAGE_ROOT>`, ISO Ubuntu Server/Desktop e Windows Server 2022.
+260 GiB thin sotto `<VM_STORAGE_ROOT>`, ISO Ubuntu Server/Desktop e Windows Server 2022 Datacenter Desktop Experience.
 Verificare VMnet8 `192.168.214.0/24`, gateway `.2`, DHCP `.128-.254`.
 Controllare owner host UDP `51820`; non cambiarlo.
 
@@ -58,7 +62,7 @@ nuovi CIDR.
 **Prerequisiti:** Fase 0.
 
 **Azioni:** creare VM sotto `<VM_STORAGE_ROOT>/PowerSeven/`, una NIC VMware NAT,
-risorse minimum/recommended, ISO montata. Usare nomi VM distinti dagli
+risorse approvate (VPS12 2/2/80, VPS13 2/3/60, VPS14 4/5/120), ISO montata. Usare nomi VM distinti dagli
 hostname. Non creare snapshot.
 
 **Configurazione attesa:** tre VM spente o in installazione; VMDK thin.
@@ -76,7 +80,8 @@ corrette.
 
 **Prerequisiti:** Fase 1; ISO.
 
-**Azioni:** installare Ubuntu Desktop su VPS12, Windows Server 2022 su VPS13,
+**Azioni:** installare Ubuntu Desktop su VPS12, Windows Server 2022 Datacenter
+Desktop Experience su VPS13,
 Ubuntu Server su VPS14. Impostare hostname, locale, timezone, account
 amministrativo e SSH/OpenSSH previsto. DNS temporaneo `192.168.214.2`.
 
@@ -213,7 +218,8 @@ HTTPS via tunnel. Il test client `.101` è esclusivamente WG-03 di cutover.
 
 **Azioni:** creare nuova CA con `<CA_PRIVATE_KEY>` custodita fuori Git; emettere
 certificati Nginx e LDAPS. Installare PostgreSQL, MariaDB, Redis; creare DB
-vuoti `azienda_lab`, `forgejo`, `nextcloud`, `postgres`, `panel` e ruoli nuovi.
+vuoti `forgejo`, `nextcloud`, `postgres`, `panel` e ruoli nuovi; `azienda-portal`
+non richiede un database runtime.
 
 **Configurazione attesa:** nessun vecchio dump, volume o chiave importata.
 
@@ -233,7 +239,8 @@ vuoti `azienda_lab`, `forgejo`, `nextcloud`, `postgres`, `panel` e ruoli nuovi.
 Scribble con config nuova. `azienda-portal` è la dashboard CORE e deve essere
 installato/configurato prima dell'abilitazione di `powerseven-core.target`.
 Creare nuovi volumi; non copiare volumi Azure.
-Configurare LDAP/LDAPS e connessioni DB con placeholder.
+Configurare LDAP/LDAPS e le connessioni DB delle sole applicazioni che le
+richiedono; la dashboard usa AD-only e sessioni senza PostgreSQL.
 
 **Configurazione attesa:** backend loopback/Docker, DNS names `*.lab.test`.
 

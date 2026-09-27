@@ -76,7 +76,8 @@ per distinguere stato ricreabile da stato escluso.
       host/Docker confermato.
 - [ ] Conflitto operativo dell'overlay host `giorgio` gestito in fase di test
       senza alterarlo ora.
-- [ ] ISO Ubuntu Server/Desktop e Windows Server 2022 disponibili.
+- [ ] ISO Ubuntu Server/Desktop e Windows Server 2022 Datacenter Desktop
+      Experience disponibili.
 - [ ] Nuovo dominio `LAB.TEST`, utenti, gruppi e GPO minime definiti.
 - [ ] DNS bootstrap temporaneo e passaggio finale ad AdGuard testati.
 - [ ] Nome unit WireGuard verificato durante implementazione; modello non lo

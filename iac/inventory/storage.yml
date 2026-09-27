@@ -45,7 +45,7 @@ recreatable_infrastructure:
     source: db_postgresql
     data: [database schemas, roles, grants]
     target: create_empty_databases
-    databases: [azienda_lab, forgejo, nextcloud, postgres]
+    databases: [forgejo, nextcloud, postgres]
     persistent: true
     recreatable: true
   - graph_id: datastore_mariadb

@@ -4,3 +4,6 @@ graphify-out/
 iac/vmware/manual-vm-paths.yml
 iac/vmware/*.local.yml
 iac/vmware/*.local.env
+iac/docker/.env
+iac/ansible/*.local.yml
+iac/ansible/*.vault.yml
