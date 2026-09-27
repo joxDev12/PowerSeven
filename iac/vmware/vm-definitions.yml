@@ -50,10 +50,17 @@ vms:
     vcpu: 4
     memory_gib: 5
     disk_gib: 40
-    nic:
-      network: VMnet8
-      underlay_ip: 192.168.214.14
-      gateway: 192.168.214.2
+    nics:
+      - role: vmnet8-underlay
+        network: VMnet8
+        address: 192.168.214.14/24
+        gateway: 192.168.214.2
+        dns: 192.168.214.13
+      - role: bridged-admin-ingress
+        network: bridged
+        address: dhcp
+        default_route: false
+        dns: false
     iso_ref: ubuntu_server
     vmx_path: <VM_STORAGE_ROOT>/PowerSeven/VPS14/VPS14.vmx
     state: definition_only

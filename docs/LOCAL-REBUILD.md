@@ -14,10 +14,12 @@ workflow.
 |---|---|---|---|---:|---:|---:|---|
 | VPS12 | `PowerSeven-VPS12` | `soc-desktop` | Ubuntu Desktop 24.04.x | 2 | 2 GiB | 80 GiB | VMnet8 / `192.168.214.12` |
 | VPS13 | `PowerSeven-VPS13` | `DC02` | Windows Server 2022 Datacenter Desktop Experience | 2 | 3 GiB | 60 GiB | VMnet8 / `192.168.214.13` |
-| VPS14 | `PowerSeven-VPS14` | `soc-server` | Ubuntu Server 24.04.x | 4 | 5 GiB | 40 GiB | VMnet8 / `192.168.214.14` |
+| VPS14 | `PowerSeven-VPS14` | `soc-server` | Ubuntu Server 24.04.x | 4 | 5 GiB | 40 GiB | VMnet8 `.14` + Bridged DHCP |
 
-VMnet8: `192.168.214.0/24`, gateway `192.168.214.2`. L'overlay WireGuard
-resta `10.10.10.0/24`; non va configurato durante il bootstrap iniziale.
+VMnet8: `192.168.214.0/24`, gateway `192.168.214.2`; VPS14 usa DNS DC02
+`192.168.214.13`. La NIC Bridged usa DHCP senza default route né DNS. Il VPN
+amministrativo separato è `10.99.0.0/24` (`wg-admin` `.1`, laptop `.2`);
+`10.10.10.0/24` resta riservato al futuro overlay applicativo.
 
 Totale allocato: 8 vCPU, 10 GiB RAM, 180 GiB thin. L'host deve avere ulteriore
 margine per Workstation e il sistema operativo.
@@ -75,30 +77,52 @@ provisiona VM o host automaticamente.
 
 - **Modalità:** installazione manuale con template; bootstrap parzialmente
   automatizzabile.
-- **Comandi previsti:** autoinstall usa i file
+- **Comandi Linux disponibili:** `bootstrap.sh --check/--apply --checkpoint 1`
+  per root/LVM; `--checkpoint 2` per rete a due NIC con rollback e
+  riconnessione `.145 -> .14`; `--checkpoint 3` per WireGuard admin e staging
+  del primo client. L'espansione futura del disco VMware richiederà una fase
+  separata `growpart`/`pvresize`.
+- **Comandi Windows:** autoinstall usa i file
   `iac/linux/autoinstall/vps12-user-data.yaml` e
-  `iac/linux/autoinstall/vps14-user-data.yaml`; su Windows il dry-run reale è
+  `iac/linux/autoinstall/vps14-user-data.yaml`; il dry-run Windows reale è
   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File iac/windows/bootstrap.ps1 -Check`.
+- **Runner da DC02:** `iac/windows/setup-powerseven.ps1 -Check
+  -Vps14Address <DHCP_IP> -UbuntuUsername <UBUNTU_USER> -Checkpoint N` esegue
+  un check remoto read-only; `-PrepareBootstrap` migra soltanto
+  bootstrap/wrapper/sudoers; `-Apply` applica il checkpoint Linux. La password
+  SSH e la prima autenticazione sudo restano prompt interattivi nativi e non
+  vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
+  configura route persistente DC02, firewall RDP e recupera il client config
+  fuori repository.
 - **Prerequisiti:** PHASE 2 PASS; placeholder risolti in workspace locale;
   password e chiavi fuori Git.
 - **Risultato atteso:** Ubuntu Desktop/Server e Windows Server 2022 Desktop
-  Experience installati con hostname e SSH/OpenSSH iniziali.
-- **Stato:** **PARTIAL** per i template Linux, che non hanno ancora
-  renderer/installer orchestrato; il bootstrap Windows VPS13 è **LIVE VALIDATED**.
+  Experience installati con hostname, SSH/OpenSSH iniziali e bootstrap Linux
+  installato.
+- **Stato:** **PARTIAL**. Credential bootstrap DC02→VPS14, SSH key persistence,
+  rerun passwordless, wrapper NOPASSWD ristretto, migrazione/rollback del
+  bootstrap e Checkpoint 1 storage sono **LIVE VALIDATED**; CP2 networking,
+  CP3 VPN e la UX remota `-Check`/`-PrepareBootstrap` sono implementati ma
+  **NOT YET LIVE VALIDATED**. Il bootstrap Windows VPS13 è **LIVE VALIDATED**.
+
+  Il primo check remoto CP2 ha confermato key-only e il rilevamento del
+  bootstrap live CP1-only; si è fermato esclusivamente per un errore di
+  `ValidateSet` sullo status `MISSING`, corretto nella milestone corrente.
+  Il terminale è sembrato attendere un input dopo il terzo PASS: comportamento
+  da verificare domani solo se si ripresenta; non è stata introdotta alcuna
+  modifica speculativa.
 
 ### PHASE 4 — rete/IP underlay
 
 - **Modalità:** manuale/partially automatizzabile.
-- **Comandi previsti:** su Linux verificare `ip addr` e `ip route`; su Windows
-  il checkpoint VPS13 usa `bootstrap.ps1 -Apply -Checkpoint 2`, mentre
-  `Get-NetIPConfiguration` resta la verifica manuale. Linux non ha ancora un
-  apply idempotente repository.
+- **Comandi previsti:** `sudo powerseven-bootstrap --check/--apply
+  --checkpoint 2`; il runner esegue la transizione DHCP→`.14`, conferma il
+  rollback guard dopo la riconnessione e valida route/DNS/default gateway.
 - **Prerequisiti:** OS installato; VMnet8/gateway validati.
-- **Risultato atteso:** `.12/.13/.14` statici su `192.168.214.0/24`, gateway
-  `.2`, DNS bootstrap `1.1.1.1`/`8.8.8.8`; nessun conflitto con LAN o bridge
-  Docker.
-- **Stato:** **PARTIAL** per l'apply Linux; la rete VPS13 Windows è **LIVE
-  VALIDATED** con interfaccia reale.
+- **Risultato atteso:** VMnet8 `.12/.13/.14` statici, gateway `.2`, DNS DC02
+  `.13`; NIC Bridged DHCP senza default route/DNS e senza collisione subnet.
+- **Stato:** **IMPLEMENTED / NOT YET LIVE VALIDATED** per CP2 Linux; la rete
+  VPS13 Windows è **LIVE VALIDATED** con interfaccia reale.
 
 ### PHASE 5 — VPS13 AD/DNS
 
@@ -176,16 +200,17 @@ le password non vengono versionate.
 
 ### PHASE 8 — WireGuard/DNS/CA
 
-- **Modalità:** manuale controllata; automazione mancante.
-- **Comandi previsti:** nessun generator repository. Le verifiche finali
-  previste sono `sudo wg show`, `dig`, `openssl s_client` e i test DNS della
-  suite `docs/local-acceptance-tests.md`.
-- **Prerequisiti:** underlay stabile, owner UDP 51820 deciso, secret store
-  locale.
-- **Risultato atteso:** nuove chiavi, hub `.14`, peer VM `.12/.13`, DNS finale
-  DC02 → AdGuard e CA nuova per TLS/LDAPS.
-- **Stato:** **MISSING** per provisioning. Esistono inventory e role contract,
-  ma non generatori di chiavi/CA, apply WireGuard, utenti/gruppi DNS o record.
+- **Modalità:** runner controllato da DC02; nessun WireGuard su Jarvis/Fedora.
+- **Comandi previsti:** `sudo powerseven-bootstrap --check/--apply
+  --checkpoint 3`, con route DC02 persistente e test RDP `10.99.0.2 ->
+  192.168.214.13:3389`.
+- **Prerequisiti:** CP2 confermato, seconda NIC Bridged configurata in VMware,
+  LAN fisica non sovrapposta, secret/key bootstrap già validati.
+- **Risultato atteso:** `wg-admin` `.1`, client `.2`, UDP/51820 soltanto sulla
+  Bridged, nessun NAT normale, config client in `C:\ProgramData\PowerSeven\clients`.
+- **Stato:** **IMPLEMENTED / NOT YET LIVE VALIDATED** per VPN admin;
+  peer VPS12/VPS13, CA, DNS applicativo e overlay `10.10.10.0/24` restano
+  fasi successive.
 
 ### PHASE 9 — service-control
 
@@ -219,7 +244,7 @@ le password non vengono versionate.
 | Area | Classificazione | Evidenza reale |
 |---|---|---|
 | `iac/vmware/` | A + B | `preflight-host` e `validate-vms` sono read-only eseguibili; YAML e path example sono dichiarativi. Creazione VM intenzionalmente assente. |
-| `iac/linux/` | B/C | autoinstall e variables sono template con placeholder; README dichiara che non vengono applicati automaticamente. |
+| `iac/linux/` | A parziale + B/C | `bootstrap.sh` implementa il checkpoint storage LVM read-only/apply; autoinstall e variables restano template con placeholder. Rete, pacchetti e servizi non sono ancora implementati. |
 | `iac/windows/` | A + B | `bootstrap.ps1` implementa checkpoint 1-8 ed è stato validato live su VPS13; `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Ansible Windows non è completo. |
 | `iac/ansible/` | A limitata + B/C | playbook e inventory sono invocabili come struttura; `check.yml` è un check contract; solo `roles/wazuh_server/tasks/main.yml` contiene task reali, gli altri role sono README. |
 | `iac/docker/` | B/C | Compose è dichiarativo e usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi live. |
@@ -233,7 +258,7 @@ le password non vengono versionate.
 | Componente | Stato attuale | Mancante | Prossima implementazione |
 |---|---|---|---|
 | VM VMware | GUI + validator read-only | nessun create API, per scelta | checklist GUI e usare `validate-vms` |
-| Ubuntu bootstrap | autoinstall template | renderer/seed e post-bootstrap apply | renderer minimo per placeholder, poi test su VM |
+| Ubuntu bootstrap | checkpoint storage LVM eseguibile + autoinstall template | rete, pacchetti, WireGuard e servizi VPS14 | estendere `bootstrap.sh` a checkpoint separati e testarli su VPS14 |
 | Windows provisioning | workflow PowerShell checkpoint 1-8 live validato | integrazione Ansible e firewall policy completa | wrapper Ansible e policy firewall |
 | Ansible | inventory/playbook/contratti | task per tutti i role eccetto tuning Wazuh | implementare un role per checkpoint |
 | Docker Compose | servizi dichiarati, `restart: no` | tag approvati, `.env`, cron Nextcloud, config/volumi live | chiudere immagini e deployment per app |

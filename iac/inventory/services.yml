@@ -61,6 +61,13 @@ services:
     unit: wg-quick@wg0
     unit_state: observed_current_azure
     target_local_unit: verify_after_local_wireguard_configuration
+    target_local:
+      interface: wg-admin
+      unit: wg-quick@wg-admin.service
+      address: 10.99.0.1/24
+      ingress: bridged NIC UDP/51820 only
+      return_route_dc02: 10.99.0.0/24 via 192.168.214.14
+      nat: fallback_only
     ports: [51820/udp]
     persistent: true
     secret_refs: [wireguard_server_private_key, wireguard_peer_config]

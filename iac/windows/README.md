@@ -6,7 +6,9 @@ Target: Windows Server 2022 Datacenter Desktop Experience, `DC02`,
 ## Workflow eseguibile
 
 `bootstrap.ps1` è un orchestratore a checkpoint, non un installer one-shot.
-Senza `-Apply` è read-only; `-Apply` richiede sempre un checkpoint singolo.
+Le modalità sono mutuamente esclusive: `-Check` esegue un controllo remoto
+read-only, `-PrepareBootstrap` migra solo l'infrastruttura bootstrap e `-Apply`
+applica il checkpoint richiesto.
 Non esegue reboot automaticamente.
 
 ```powershell
@@ -38,6 +40,52 @@ Checkpoint:
 
 `validate-vps13.ps1` verifica hostname, rete, servizi AD DS/DNS, forest/domain,
 zone, record, utenti, gruppi e membership. Non verifica né stampa password.
+
+## Runner VPS14 da DC02
+
+`setup-powerseven.ps1` prepara l'accesso iniziale a VPS14 senza memorizzare
+password. In questa fase l'indirizzo DHCP viene fornito con `-Vps14Address`;
+la discovery automatica DHCP resta un'estensione successiva.
+
+```powershell
+.\setup-powerseven.ps1 -Check -Vps14Address 192.168.214.145 -UbuntuUsername serveradmin -Checkpoint 2
+.\setup-powerseven.ps1 -PrepareBootstrap -Vps14Address 192.168.214.145 -UbuntuUsername serveradmin -Checkpoint 2
+.\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.145 -UbuntuUsername serveradmin -Checkpoint 1
+.\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.145 -UbuntuUsername serveradmin -Checkpoint 2
+.\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 3
+```
+
+`-Check` richiede una chiave PowerSeven già presente e verifica SSH key-only,
+versione/capabilities del bootstrap e il checkpoint remoto senza staging,
+SCP, password o mutazioni. Exit code `10` indica remediation necessaria ma
+nessun errore tecnico; un exit code diverso da zero indica un errore reale.
+`-PrepareBootstrap` usa il flusso transazionale sudo già validato e si ferma
+dopo la migrazione, senza eseguire il checkpoint.
+
+In `-Apply` il primo enrollment usa il prompt nativo di `ssh.exe` per la
+password Ubuntu e il prompt nativo di `sudo` per una sola autenticazione.
+PowerShell non acquisisce, passa in argv, salva o stampa le password. Il
+runner crea una chiave ED25519 senza passphrase sotto
+`C:\ProgramData\PowerSeven\ssh\`, applica ACL ristrette, installa la public
+key in `~/.ssh/authorized_keys` e verifica l'accesso con
+`PasswordAuthentication=no`/`IdentitiesOnly=yes`.
+
+Trasferisce poi `iac/linux/bootstrap.sh` in `/usr/local/lib/powerseven/`, crea
+il wrapper root-owned `/usr/local/sbin/powerseven-bootstrap` e valida
+`/etc/sudoers.d/powerseven-bootstrap` con `visudo`. Il wrapper accetta solo
+`--check|--apply --checkpoint N` con checkpoint allowlisted, oltre ai probe
+metadata `--version`/`--capabilities`; non consente path, script o shell
+arbitrari. La policy sudo è `NOPASSWD` soltanto per quel wrapper.
+
+Dopo la prima esecuzione, riaprire PowerShell non richiede una nuova password:
+usare la stessa chiave persistente e, per evitare anche il prompt username,
+passare `-UbuntuUsername`. CP2 configura VMnet8 statico `.14` e Bridged DHCP
+senza default route/DNS, usando un rollback guard prima della conferma.
+CP3 configura `wg-admin` su VPS14, aggiunge su DC02 la route persistente
+`10.99.0.0/24 via 192.168.214.14`, limita RDP alla subnet VPN e salva il client
+config in `C:\ProgramData\PowerSeven\clients\`. WireGuard CLI non viene
+installato o orchestrato su DC02/Jarvis: la generazione resta nel bootstrap
+Linux VPS14. Il file client è un secret locale e non entra nel repository.
 
 ## Dichiarazioni e secret
 

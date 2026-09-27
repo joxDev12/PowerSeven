@@ -6,11 +6,17 @@
 |---|---|---|
 | Internet pubblico | il solo ingresso pubblico dichiarato per la VPN è WireGuard VPS14 UDP 51820; Nginx può essere pubblicato secondo NSG/routing | un listener host non prova che sia Internet-esposto |
 | Azure VNet private | tre VNet isolate, ciascuna `172.16.0.0/16` con subnet `172.16.0.0/24` e IP `172.16.0.4` | indirizzo ripetuto legittimo: VNet distinte, nessun peering |
-| WireGuard | `10.10.10.0/24`, accesso amministrativo e servizi interni | non è Internet pubblico; richiede peer autorizzato e routing del tunnel |
+| WireGuard Azure storico | `10.10.10.0/24`, peer e servizi osservati | riferimento storico; non è il VPN admin del rebuild |
+| WireGuard admin locale | `10.99.0.0/24`, solo accesso amministrativo | peer autorizzato; ingresso Bridged solo UDP/51820 |
 | localhost | `127.0.0.0/8`, backend come Nginx→container/processi | non è raggiungibile direttamente dalla rete senza proxy/forwarding locale |
 | Docker | reti bridge dedicate su VPS14 | un container non è automaticamente raggiungibile dalla VNet o da Internet; dipende dai port mapping |
 
 L'Azure NSG filtra il traffico a livello Azure prima che raggiunga l'host; firewall host (Windows Firewall, nftables/UFW/Docker) decide poi sul traffico arrivato. Perciò un binding su una VNet Azure o su `10.10.10.14` non è automaticamente pubblico su Internet. Le tre VNet erano isolate e senza peering. Le regole NSG effettive, i public IP/NAT e la loro associazione non sono stati verificati direttamente in questa revisione. Non risultano configurazioni WireGuard temporanee attive; UDP 51820 è la porta VPN operativa dichiarata.
+
+Nel target locale la NIC Bridged di VPS14 non deve esporre SSH, Cockpit, RDP,
+PostgreSQL, Docker, Nginx o applicazioni. Il firewall nftables del checkpoint 3
+consente su quella NIC solo UDP/51820 e traffico correlato; il RDP su DC02 è
+limitato da Windows Firewall alla subnet `10.99.0.0/24`.
 
 ## Controlli osservati e superfici
 

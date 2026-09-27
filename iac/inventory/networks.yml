@@ -41,7 +41,15 @@ target_local:
       gateway: 192.168.214.2
     overlay:
       cidr: 10.10.10.0/24
-      purpose: vpn_access_and_application_service_addresses
+      purpose: future_lab_overlay_and_application_service_addresses
+      state: reserved_not_used_by_admin_vpn
+    admin_vpn:
+      cidr: 10.99.0.0/24
+      purpose: remote_administration_only
+      hub: vps14
+      server: 10.99.0.1/24
+      first_client: 10.99.0.2/32
+      transport: WireGuard via bridged VPS14 NIC
   underlay:
     graph_id: net_local_vmware_underlay
     name: VMware VMnet8 NAT
@@ -75,7 +83,30 @@ target_local:
       chiara: 10.10.10.106/32
       simone: 10.10.10.107/32
     endpoint: udp/51820
-    state: approved_target; not configured by this task
+    state: reserved_future_overlay; not configured by this task
+  admin_vpn:
+    kind: encrypted_admin_overlay
+    cidr: 10.99.0.0/24
+    hub: vps14
+    address: 10.99.0.1/24
+    first_client:
+      name: powerseven-admin-laptop
+      address: 10.99.0.2/32
+    endpoint: udp/51820 on VPS14 bridged NIC
+    allowed_ips:
+      - 192.168.214.0/24
+      - 10.10.10.0/24
+    return_routes:
+      dc02:
+        destination: 10.99.0.0/24
+        via: 192.168.214.14
+      vps12:
+        destination: 10.99.0.0/24
+        via: 192.168.214.14
+        state: future
+    nat:
+      default: false
+      fallback: documented_only
   dns_paths:
     infrastructure:
       vps12_to_dc02: 192.168.214.13
@@ -101,7 +132,7 @@ target_local:
         source: upstream_udp_51820
         destination: 192.168.214.14:51820
         state: design_only
-    current_conflict: REQUIRED_LOCAL_DISCOVERY; choose one UDP 51820 owner before implementation
+    current_conflict: none_for_local_admin_vpn; physical LAN/router ownership remains a manual prerequisite
   collision_scan:
     required_checks:
       - local_lan

@@ -268,7 +268,12 @@ def check_vmware_definitions(vms):
     entries = vms.get("vms", [])
     ids = [item.get("id") for item in entries]
     names = [item.get("vm_name") for item in entries]
-    ips = [item.get("nic", {}).get("underlay_ip") for item in entries]
+    def underlay_nic(item):
+        if item.get("nics"):
+            return next((nic for nic in item["nics"] if nic.get("role") == "vmnet8-underlay"), {})
+        return item.get("nic", {})
+
+    ips = [str(underlay_nic(item).get("address", underlay_nic(item).get("underlay_ip"))).split("/")[0] for item in entries]
     if len(entries) != 3 or len(set(ids)) != len(ids) or len(set(names)) != len(names) or len(set(ips)) != len(ips):
         report("FAIL", "vmware-definitions", "three unique VM ids, names and underlay IPs are required")
         return
@@ -276,7 +281,11 @@ def check_vmware_definitions(vms):
     for item in entries:
         if item.get("state") != "definition_only":
             errors.append(f"{item.get('id')}: state")
-        if item.get("nic", {}).get("network") != "VMnet8":
+        if item.get("nics"):
+            underlay = underlay_nic(item)
+            if underlay.get("network") != "VMnet8" or underlay.get("address", "").split("/")[0] not in ips:
+                errors.append(f"{item.get('id')}: network")
+        elif item.get("nic", {}).get("network") != "VMnet8":
             errors.append(f"{item.get('id')}: network")
         if not str(item.get("vmx_path", "")).startswith("<VM_STORAGE_ROOT>/"):
             errors.append(f"{item.get('id')}: vmx_path must be parameterized")

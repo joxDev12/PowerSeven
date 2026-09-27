@@ -109,19 +109,29 @@ def validate_vm(vm: dict, vmx_path: Path, iso_paths: dict[str, str], running: se
     else:
         report("FAIL", f"{vm_id}.guest-os", f"expected {vm['guest_os_type']}, got {values.get('guestOS', '<missing>')}")
 
+    expected_nics = vm.get("nics") or [vm.get("nic", {})]
     active_nics = []
     for key, value in values.items():
         match = re.match(r"^(ethernet\d+)\.present$", key)
         if match and value.upper() == "TRUE":
             active_nics.append(match.group(1))
-    if len(active_nics) != 1:
-        report("FAIL", f"{vm_id}.nic-count", f"expected one active NIC, got {active_nics}")
+    if len(active_nics) != len(expected_nics):
+        report("FAIL", f"{vm_id}.nic-count", f"expected {len(expected_nics)} active NIC(s), got {active_nics}")
     else:
-        nic = active_nics[0]
-        if values.get(f"{nic}.networkName") == "VMnet8" and values.get(f"{nic}.connectionType") == "custom":
-            report("PASS", f"{vm_id}.nic", "one active NIC connected to VMnet8")
+        nic_errors = []
+        for index, nic in enumerate(active_nics):
+            expected = expected_nics[index]
+            role = expected.get("role", "underlay")
+            network = values.get(f"{nic}.networkName", "<missing>")
+            connection = values.get(f"{nic}.connectionType", "<missing>")
+            if role in {"underlay", "vmnet8-underlay"} and (network != "VMnet8" or connection != "custom"):
+                nic_errors.append(f"{nic}: expected VMnet8/custom, got {network}/{connection}")
+            if role == "bridged-admin-ingress" and connection != "bridged":
+                nic_errors.append(f"{nic}: expected bridged, got {network}/{connection}")
+        if nic_errors:
+            report("FAIL", f"{vm_id}.nic", "; ".join(nic_errors))
         else:
-            report("FAIL", f"{vm_id}.nic", f"expected custom VMnet8, got {values.get(f'{nic}.networkName', '<missing>')}")
+            report("PASS", f"{vm_id}.nic", f"{len(active_nics)} expected NIC(s) configured")
 
     active_device_keys = {
         key for key, value in values.items()
@@ -129,7 +139,7 @@ def validate_vm(vm: dict, vmx_path: Path, iso_paths: dict[str, str], running: se
     }
     unexpected_nics = sorted(
         key for key in active_device_keys
-        if key.startswith("ethernet") and key != "ethernet0.present"
+        if key.startswith("ethernet") and key not in {f"ethernet{i}.present" for i in range(len(expected_nics))}
     )
     if unexpected_nics:
         report("FAIL", f"{vm_id}.unexpected-config", f"unexpected active NICs: {unexpected_nics}")
