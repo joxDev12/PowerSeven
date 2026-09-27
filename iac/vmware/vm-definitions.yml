@@ -49,7 +49,7 @@ vms:
     guest_os_type: ubuntu-64
     vcpu: 4
     memory_gib: 5
-    disk_gib: 120
+    disk_gib: 40
     nic:
       network: VMnet8
       underlay_ip: 192.168.214.14

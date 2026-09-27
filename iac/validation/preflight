@@ -240,7 +240,7 @@ def check_ports(services):
 def check_vm_resources(vms):
     entries = vms["vms"]
     totals = {key: sum(int(vm[key]) for vm in entries) for key in ("vcpu", "memory_gib", "disk_gib")}
-    expected = {"vcpu": 8, "memory_gib": 10, "disk_gib": 260}
+    expected = {"vcpu": 8, "memory_gib": 10, "disk_gib": 180}
     if len(entries) != 3 or totals != expected:
         report("FAIL", "vm-resources", f"got {len(entries)} VMs and totals {totals}, expected {expected}")
     else:

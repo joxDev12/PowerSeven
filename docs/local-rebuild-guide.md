@@ -42,7 +42,7 @@ Secret fuori repository:
 **Prerequisiti:** Workstation installato; repository clonato.
 
 **Azioni:** verificare VMware Workstation Pro, capacità thin raccomandata di
-260 GiB thin sotto `<VM_STORAGE_ROOT>`, ISO Ubuntu Server/Desktop e Windows Server 2022 Datacenter Desktop Experience.
+180 GiB thin sotto `<VM_STORAGE_ROOT>`, ISO Ubuntu Server/Desktop e Windows Server 2022 Datacenter Desktop Experience.
 Verificare VMnet8 `192.168.214.0/24`, gateway `.2`, DHCP `.128-.254`.
 Controllare owner host UDP `51820`; non cambiarlo.
 
@@ -62,7 +62,7 @@ nuovi CIDR.
 **Prerequisiti:** Fase 0.
 
 **Azioni:** creare VM sotto `<VM_STORAGE_ROOT>/PowerSeven/`, una NIC VMware NAT,
-risorse approvate (VPS12 2/2/80, VPS13 2/3/60, VPS14 4/5/120), ISO montata. Usare nomi VM distinti dagli
+risorse approvate (VPS12 2/2/80, VPS13 2/3/60, VPS14 4/5/40), ISO montata. Usare nomi VM distinti dagli
 hostname. Non creare snapshot.
 
 **Configurazione attesa:** tre VM spente o in installazione; VMDK thin.

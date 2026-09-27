@@ -14,13 +14,17 @@ workflow.
 |---|---|---|---|---:|---:|---:|---|
 | VPS12 | `PowerSeven-VPS12` | `soc-desktop` | Ubuntu Desktop 24.04.x | 2 | 2 GiB | 80 GiB | VMnet8 / `192.168.214.12` |
 | VPS13 | `PowerSeven-VPS13` | `DC02` | Windows Server 2022 Datacenter Desktop Experience | 2 | 3 GiB | 60 GiB | VMnet8 / `192.168.214.13` |
-| VPS14 | `PowerSeven-VPS14` | `soc-server` | Ubuntu Server 24.04.x | 4 | 5 GiB | 120 GiB | VMnet8 / `192.168.214.14` |
+| VPS14 | `PowerSeven-VPS14` | `soc-server` | Ubuntu Server 24.04.x | 4 | 5 GiB | 40 GiB | VMnet8 / `192.168.214.14` |
 
 VMnet8: `192.168.214.0/24`, gateway `192.168.214.2`. L'overlay WireGuard
 resta `10.10.10.0/24`; non va configurato durante il bootstrap iniziale.
 
-Totale allocato: 8 vCPU, 10 GiB RAM, 260 GiB thin. L'host deve avere ulteriore
+Totale allocato: 8 vCPU, 10 GiB RAM, 180 GiB thin. L'host deve avere ulteriore
 margine per Workstation e il sistema operativo.
+
+VPS14 usa inizialmente un virtual disk thin da 40 GiB; il disco può essere
+espanso in seguito. Monitorare soprattutto Wazuh Indexer, Docker, i database e
+Nextcloud, che sono i principali consumatori di storage.
 
 ## Stati
 
@@ -40,7 +44,7 @@ provisiona VM o host automaticamente.
 - **Modalità:** automatizzabile, read-only.
 - **Comando:**
   `iac/vmware/preflight-host --storage-root <VM_STORAGE_ROOT> --ubuntu-desktop-iso <UBUNTU_DESKTOP_ISO> --ubuntu-server-iso <UBUNTU_SERVER_ISO> --windows-server-iso <WINDOWS_SERVER_2022_ISO>`
-- **Prerequisiti:** VMware Workstation Pro, ISO leggibili, almeno 260 GiB
+- **Prerequisiti:** VMware Workstation Pro, ISO leggibili, almeno 180 GiB
   liberi nel percorso scelto, VMnet8 già presente.
 - **Risultato atteso:** capability VMware, spazio, ISO, VMnet8/gateway e
   collisioni IP controllati; nessuna VM o rete modificata.

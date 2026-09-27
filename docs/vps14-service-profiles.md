@@ -198,7 +198,9 @@ La dichiarazione e i template sono in
 | 5 GiB | target iniziale raccomandato; Wazuh tuned da validare sulla VM locale |
 | 6 GiB | fallback se i test reali mostrano pressione memoria |
 
-Il target VPS14 locale è 4 vCPU, 5 GiB RAM iniziali e 120 GiB thin disk.
+Il target VPS14 locale è 4 vCPU, 5 GiB RAM iniziali e 40 GiB thin disk.
+Il virtual disk è espandibile in seguito; monitorare soprattutto Wazuh Indexer,
+Docker, database e Nextcloud.
 5 GiB è il target iniziale raccomandato ma deve ancora essere validato sulla
 VM locale; 4 GiB è un esperimento successivo e 6 GiB è il fallback in caso di
 pressione. Il profilo Indexer 512m/direct 256m è stato validato su Azure, ma

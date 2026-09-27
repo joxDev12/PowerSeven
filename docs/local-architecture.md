@@ -10,7 +10,7 @@ dipendenza Azure e nessun dato applicativo precedente.
 | Hypervisor | VMware Workstation Pro |
 | CPU | Minimo 8 vCPU allocabili al laboratorio; lasciare margine all'host |
 | RAM | 10 GiB allocati al laboratorio; lasciare margine all'host |
-| Storage | 260 GiB thin allocati; lasciare margine all'host |
+| Storage | 180 GiB thin allocati; lasciare margine all'host |
 | Storage root | `<VM_STORAGE_ROOT>` configurabile, senza percorsi host hardcoded |
 | Rete | Una rete VMware underlay non sovrapposta alle reti locali esistenti |
 
@@ -93,9 +93,9 @@ da creare solo nella fase di implementazione.
 | VM | Minimum | Recommended lab profile | Motivo |
 |---|---:|---:|---|
 | VPS13 / DC02 | 2 vCPU, 3 GiB RAM, 60 GiB thin | 2 vCPU, 3 GiB, 60 GiB thin | AD DS, DNS, Kerberos, LDAP, RDP |
-| VPS14 / soc-server | 4 vCPU, 5 GiB RAM, 120 GiB thin | 4 vCPU, 5 GiB, 120 GiB thin | profilo locale approvato; Wazuh va validato nel laboratorio |
+| VPS14 / soc-server | 4 vCPU, 5 GiB RAM, 40 GiB thin | 4 vCPU, 5 GiB, 40 GiB thin | target iniziale; espandibile dopo monitoraggio storage |
 | VPS12 / soc-desktop | 2 vCPU, 2 GiB RAM, 80 GiB thin | 2 vCPU, 2 GiB, 80 GiB thin | Ubuntu Desktop, XFCE, XRDP, SSSD |
-| Totale | 8 vCPU, 10 GiB, 260 GiB thin | 8 vCPU, 10 GiB, 260 GiB thin | lascia CPU, RAM e storage all'host |
+| Totale | 8 vCPU, 10 GiB, 180 GiB thin | 8 vCPU, 10 GiB, 180 GiB thin | lascia CPU, RAM e storage all'host |
 
 Il target approvato assegna 2+3+5 GiB = 10 GiB alle VM. Il risultato operativo
 di Wazuh e dei profili applicativi va validato dopo il rebuild; non esiste un

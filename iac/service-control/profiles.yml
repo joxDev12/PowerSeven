@@ -5,7 +5,7 @@ source: measured_vps14_discovery_2026-09-26
 target:
   vcpu: 4
   memory_gib_initial: 5
-  thin_disk_gib: 120
+  thin_disk_gib: 40
   status: recommended_initial_target_requires_local_validation
   experimental_memory_gib: 4
   fallback_memory_gib: 6

@@ -50,7 +50,7 @@ Totale Wazuh: ~1.5–1.6 GiB
 ```
 
 Con il tuning validato, il target iniziale VPS14 locale è 4 vCPU, 5 GiB RAM e
-120 GiB thin disk. 5 GiB è raccomandato ma deve ancora essere validato sulla VM
+40 GiB thin disk, espandibile in seguito. 5 GiB è raccomandato ma deve ancora essere validato sulla VM
 locale; 4 GiB resta sperimentale; 6 GiB è il fallback se emerge pressione.
 Wazuh resta on-demand e normalmente OFF.
 
