@@ -79,9 +79,8 @@ provisiona VM o host automaticamente.
   password e chiavi fuori Git.
 - **Risultato atteso:** Ubuntu Desktop/Server e Windows Server 2022 Desktop
   Experience installati con hostname e SSH/OpenSSH iniziali.
-- **Stato:** **PARTIAL**. I template Linux non hanno ancora renderer/installer
-  orchestrato; il bootstrap Windows è invece disponibile a checkpoint, ma non è
-  stato eseguito su VPS13 live da questa macchina.
+- **Stato:** **PARTIAL** per i template Linux, che non hanno ancora
+  renderer/installer orchestrato; il bootstrap Windows VPS13 è **LIVE VALIDATED**.
 
 ### PHASE 4 — rete/IP underlay
 
@@ -94,8 +93,8 @@ provisiona VM o host automaticamente.
 - **Risultato atteso:** `.12/.13/.14` statici su `192.168.214.0/24`, gateway
   `.2`, DNS bootstrap `1.1.1.1`/`8.8.8.8`; nessun conflitto con LAN o bridge
   Docker.
-- **Stato:** **PARTIAL**. Gli indirizzi sono dichiarati in YAML/autoinstall e
-  nel bootstrap PowerShell, ma l'interfaccia reale resta da selezionare.
+- **Stato:** **PARTIAL** per l'apply Linux; la rete VPS13 Windows è **LIVE
+  VALIDATED** con interfaccia reale.
 
 ### PHASE 5 — VPS13 AD/DNS
 
@@ -109,10 +108,17 @@ provisiona VM o host automaticamente.
 - **Risultato atteso:** nuovo forest `LAB.TEST`, DNS, Kerberos, LDAP,
   Global Catalog, utenti/gruppi minimi e forwarder Internet iniziale
   `1.1.1.1`/`8.8.8.8`.
-- **Stato:** **PARTIAL / NEEDS_LIVE_TEST**. `bootstrap.ps1` rileva lo stato,
+- **Stato:** **LIVE VALIDATED / READY**. `bootstrap.ps1` rileva lo stato,
   installa AD DS/DNS, promuove una nuova forest senza seconda promozione,
-  configura DNS, utenti/gruppi e record in modo idempotente. La verifica
-  reale richiede ancora una VPS13 Windows.
+  configura DNS, utenti/gruppi e record in modo idempotente. Il test live di
+  `validate-vps13.ps1` ha restituito `PASS=28 WARN=0 FAIL=0`.
+
+  Sono stati validati live hostname `DC02`, `192.168.214.13/24`, gateway
+  `192.168.214.2`, DNS client `192.168.214.13`, forwarder `1.1.1.1`/
+  `8.8.8.8`, dominio `LAB.TEST`, AD DS, DNS, zone `lab.test` e `_msdcs`,
+  gruppi PowerSeven, provisioning utenti interattivo, record DNS e idempotenza
+  dei checkpoint principali. Ansible Windows resta un workflow separato e non è
+  dichiarato completo.
 
 #### Checkpoint VPS13
 
@@ -210,7 +216,7 @@ le password non vengono versionate.
 |---|---|---|
 | `iac/vmware/` | A + B | `preflight-host` e `validate-vms` sono read-only eseguibili; YAML e path example sono dichiarativi. Creazione VM intenzionalmente assente. |
 | `iac/linux/` | B/C | autoinstall e variables sono template con placeholder; README dichiara che non vengono applicati automaticamente. |
-| `iac/windows/` | A parziale + B | `bootstrap.ps1` implementa checkpoint 1-8 e `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Esecuzione live non ancora verificata. |
+| `iac/windows/` | A + B | `bootstrap.ps1` implementa checkpoint 1-8 ed è stato validato live su VPS13; `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Ansible Windows non è completo. |
 | `iac/ansible/` | A limitata + B/C | playbook e inventory sono invocabili come struttura; `check.yml` è un check contract; solo `roles/wazuh_server/tasks/main.yml` contiene task reali, gli altri role sono README. |
 | `iac/docker/` | B/C | Compose è dichiarativo e usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi live. |
 | `iac/service-control/` | A runtime/static + B | controller Python e validator sono eseguibili; unità systemd e YAML sono template di installazione, non un installer. |
@@ -224,12 +230,12 @@ le password non vengono versionate.
 |---|---|---|---|
 | VM VMware | GUI + validator read-only | nessun create API, per scelta | checklist GUI e usare `validate-vms` |
 | Ubuntu bootstrap | autoinstall template | renderer/seed e post-bootstrap apply | renderer minimo per placeholder, poi test su VM |
-| Windows provisioning | workflow PowerShell checkpoint 1-8 | test live, integrazione Ansible e firewall policy completa | eseguire su VPS13 e poi wrapper Ansible |
+| Windows provisioning | workflow PowerShell checkpoint 1-8 live validato | integrazione Ansible e firewall policy completa | wrapper Ansible e policy firewall |
 | Ansible | inventory/playbook/contratti | task per tutti i role eccetto tuning Wazuh | implementare un role per checkpoint |
 | Docker Compose | servizi dichiarati, `restart: no` | tag approvati, `.env`, cron Nextcloud, config/volumi live | chiudere immagini e deployment per app |
 | CA/TLS | riferimenti e contratti | generazione CA/certificati e trust | generatore locale escluso da Git |
-| AD users/groups | gruppi automatici + utenti interattivi al checkpoint 6 | test live; manifest locale non ancora orchestrato | eseguire checkpoint 6; mantenere password interattive |
-| DNS records | `iac/windows/provisioning.psd1` + checkpoint 5/7 | test live; forwarder finale AdGuard resta successivo | eseguire checkpoint 5/7 e validatore |
+| AD users/groups | gruppi automatici + utenti interattivi al checkpoint 6 live validati | manifest locale non ancora orchestrato | mantenere password interattive; aggiungere manifest locale in seguito |
+| DNS records | `iac/windows/provisioning.psd1` + checkpoint 5/7 live validati | forwarder finale AdGuard resta successivo | riconciliare il forwarder finale quando AdGuard sarà disponibile |
 | service-control | controller/unit/validator | installazione idempotente e naming locale | installer per sole unit allowlisted |
 | dashboard | servizio/health/runtime AD-only descritti | provisioning sorgente/config/Nginx | role dashboard senza PostgreSQL |
 | Wazuh | tuning Indexer reale; altri contratti | package/TLS/Manager/Dashboard/agent | role incrementali fresh-install |
