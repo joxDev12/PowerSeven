@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `4`; ogni modifica
+- il contratto corrente del bootstrap è la versione `5`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - il checkpoint 2 configurerà le due NIC: VMnet8 statico `.14` con gateway
@@ -54,7 +54,8 @@ Il checkpoint riconosce le interfacce dall'indirizzo/subnet e dal MAC, non da
 `ens32`/`ens34`. Salva i file Netplan, applica la configurazione con un timer di
 rollback e richiede una conferma dal runner dopo la riconnessione a
 `192.168.214.14`. La NIC bridged mantiene il DHCP ma usa
-`dhcp4-overrides: use-routes: false` e `use-dns: false`.
+`dhcp4-overrides: use-routes: false` e `use-dns: false`; dopo `netplan apply`
+la validazione DHCP è bounded a 45 secondi prima di attivare il rollback.
 
 ## Checkpoint 3 — VPN amministrativo
 

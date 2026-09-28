@@ -56,7 +56,7 @@ la discovery automatica DHCP resta un'estensione successiva.
 ```
 
 `-Check` richiede una chiave PowerSeven già presente e verifica SSH key-only,
-bootstrap contract version `4`, capabilities e checkpoint remoto senza staging,
+bootstrap contract version `5`, capabilities e checkpoint remoto senza staging,
 SCP, password o mutazioni. Exit code `10` indica remediation necessaria ma
 nessun errore tecnico; un exit code diverso da zero indica un errore reale.
 `-PrepareBootstrap` usa il flusso transazionale sudo già validato e si ferma

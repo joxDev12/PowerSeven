@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=0
-readonly POWERSEVEN_BOOTSTRAP_VERSION='4'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='5'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -455,7 +455,7 @@ verify_network_state() {
 network_state_missing() {
     local missing='' underlay_address bridge_address bridge_prefix default_routes dns_status bridged_dns
     local operstate carrier
-    underlay_address=$(ip -o -4 addr show dev "$VMNET8_IF" scope global | awk '$4 == "192.168.214.14/24" { print $4; exit }')
+    underlay_address=$(ip -o -4 addr show dev "$VMNET8_IF" scope global 2>/dev/null | awk '$4 == "192.168.214.14/24" { print $4; exit }' || true)
     [[ "$underlay_address" == "$UNDERLAY_ADDRESS" ]] || missing+='underlay static pending; '
 
     default_routes=$(ip -4 route show default 2>/dev/null || true)
@@ -468,11 +468,11 @@ network_state_missing() {
     carrier=$(cat "/sys/class/net/$BRIDGED_IF/carrier" 2>/dev/null || printf 'unknown')
     [[ "$operstate" == 'up' && "$carrier" == '1' ]] || missing+='bridged link/carrier pending; '
 
-    bridge_address=$(ip -o -4 addr show dev "$BRIDGED_IF" scope global | awk 'NF { print $4; exit }')
+    bridge_address=$(ip -o -4 addr show dev "$BRIDGED_IF" scope global 2>/dev/null | awk 'NF { print $4; exit }' || true)
     bridge_prefix=${bridge_address#*/}
     [[ -n "$bridge_address" && "$bridge_prefix" =~ ^[0-9]+$ ]] || missing+='bridged DHCP pending; '
 
-    if ip -4 route show default dev "$BRIDGED_IF" | grep -q .; then
+    if ip -4 route show default dev "$BRIDGED_IF" 2>/dev/null | grep -q .; then
         missing+='bridged default route present; '
     fi
 
@@ -657,7 +657,7 @@ network_checkpoint() {
         rollback_network_now "$NETWORK_TRANSACTION_ID"
         return 1
     fi
-    if ! detect_network_interfaces || ! wait_for_network_state; then
+    if ! wait_for_network_state; then
         report FAIL network 'post-apply validation failed; restoring the previous configuration'
         rollback_network_now "$NETWORK_TRANSACTION_ID"
         return 1

@@ -113,11 +113,12 @@ def main() -> int:
     else:
         report("FAIL", "network-retry", "post-apply network retry/timeout guard is incomplete")
     ready = {"underlay": True, "default_route": True, "bridge_link": True, "bridge_ipv4": True, "underlay_dns": True, "bridge_default_route": False, "bridge_dns": False}
-    pending = dict(ready, bridge_ipv4=False)
+    pending = dict(ready, underlay=False, default_route=False, bridge_ipv4=False, underlay_dns=False)
+    static_pending = dict(ready, bridge_ipv4=False)
     route_error = dict(ready, bridge_default_route=True)
     dns_error = dict(ready, bridge_dns=True)
     underlay_pending = dict(ready, underlay=False)
-    if (network_retry_fixture([pending, pending, ready]) and
+    if (network_retry_fixture([pending, static_pending, ready]) and
             not network_retry_fixture([pending] * 30) and
             not network_ready_fixture(route_error) and
             not network_ready_fixture(dns_error) and
@@ -133,11 +134,17 @@ def main() -> int:
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='4'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
+    network_checkpoint_match = re.search(r"network_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nensure_wireguard_server_keys\(\))", bootstrap, re.DOTALL)
+    network_checkpoint_body = network_checkpoint_match.group("body") if network_checkpoint_match else ""
+    if network_checkpoint_match and "if ! wait_for_network_state; then" in network_checkpoint_body and "if ! detect_network_interfaces || ! wait_for_network_state; then" not in network_checkpoint_body:
+        report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
+    else:
+        report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='5'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
         report("PASS", "bootstrap-protocol", "version and checkpoint capabilities are explicitly exposed")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '4'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '5'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
