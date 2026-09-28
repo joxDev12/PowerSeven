@@ -48,7 +48,9 @@ target_local:
       purpose: remote_administration_only
       hub: vps14
       server: 10.99.0.1/24
-      first_client: 10.99.0.2/32
+      clients:
+        jarvis: 10.99.0.2/32
+        giorgio-laptop: 10.99.0.3/32
       transport: WireGuard via bridged VPS14 NIC
   underlay:
     graph_id: net_local_vmware_underlay
@@ -89,13 +91,16 @@ target_local:
     cidr: 10.99.0.0/24
     hub: vps14
     address: 10.99.0.1/24
-    first_client:
-      name: powerseven-admin-laptop
-      address: 10.99.0.2/32
+    clients:
+      - name: jarvis
+        address: 10.99.0.2/32
+        config: powerseven-admin-jarvis.conf
+      - name: giorgio-laptop
+        address: 10.99.0.3/32
+        config: powerseven-admin-giorgio-laptop.conf
     endpoint: udp/51820 on VPS14 bridged NIC
     allowed_ips:
       - 192.168.214.0/24
-      - 10.10.10.0/24
     return_routes:
       dc02:
         destination: 10.99.0.0/24

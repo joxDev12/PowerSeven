@@ -29,10 +29,12 @@ Non esistono altri overlay WireGuard operativi. La VPN temporanea usata nella mi
 
 Il design locale non riutilizza `10.10.10.0/24` per l'amministrazione. Il
 checkpoint Linux crea `wg-admin` su VPS14 con `10.99.0.1/24`, UDP/51820 sulla
-NIC Bridged e primo peer `powerseven-admin-laptop` `10.99.0.2/32`. Il peer
-raggiunge `192.168.214.0/24` e il futuro overlay `10.10.10.0/24`.
+NIC Bridged e due peer indipendenti: `jarvis` `10.99.0.2/32` e
+`giorgio-laptop` `10.99.0.3/32`. I peer raggiungono solo
+`192.168.214.0/24`; Internet non attraversa il tunnel.
 
 Il runner da DC02 aggiunge la route persistente `10.99.0.0/24 via
 192.168.214.14`, limita RDP a quella subnet e recupera il client config in
-`C:\ProgramData\PowerSeven\clients\`. Jarvis/Fedora non partecipa alla VPN;
+`C:\ProgramData\PowerSeven\clients\`. Jarvis usa il proprio file client;
+PowerSeven non orchestra WireGuard su Fedora;
 masquerade resta solo fallback, non configurazione normale.

@@ -6,8 +6,8 @@ CHECKPOINT='1'
 CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
-CLEANUP_CLIENT=0
-readonly POWERSEVEN_BOOTSTRAP_VERSION='7'
+CLEANUP_CLIENT=''
+readonly POWERSEVEN_BOOTSTRAP_VERSION='8'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -17,21 +17,19 @@ readonly UNDERLAY_GATEWAY='192.168.214.2'
 readonly UNDERLAY_DNS='192.168.214.13'
 readonly ADMIN_NETWORK='10.99.0.0/24'
 readonly ADMIN_SERVER_ADDRESS='10.99.0.1/24'
-readonly ADMIN_CLIENT_ADDRESS='10.99.0.2/32'
-readonly ADMIN_CLIENT_NAME='powerseven-admin-laptop'
+readonly -a ADMIN_PEERS=('jarvis:10.99.0.2/32' 'giorgio-laptop:10.99.0.3/32')
 readonly WG_INTERFACE='wg-admin'
 readonly WG_PORT='51820'
 readonly WG_CONFIG='/etc/wireguard/wg-admin.conf'
 readonly WG_SERVER_KEY='/etc/wireguard/powerseven-wg-admin-server.key'
 readonly WG_SERVER_PUB='/etc/wireguard/powerseven-wg-admin-server.pub'
 readonly WG_CLIENT_STATE_DIR='/var/lib/powerseven/admin-vpn/clients'
-readonly WG_CLIENT_STATE='/var/lib/powerseven/admin-vpn/clients/powerseven-admin-laptop.pub'
-readonly WG_CLIENT_EXPORT='/tmp/powerseven-admin-laptop.conf'
 readonly NETWORK_STATE_DIR='/var/lib/powerseven/network'
 readonly NETWORK_PENDING_DIR='/run/powerseven'
 readonly NETWORK_LOCK_FILE='/run/powerseven/network.lock'
 readonly NETWORK_READY_TIMEOUT_SECONDS=45
 readonly NETWORK_READY_INTERVAL_SECONDS=2
+readonly NETWORK_ROLLBACK_TIMEOUT_SECONDS=180
 
 usage() {
     cat <<'EOF'
@@ -45,7 +43,7 @@ Metadata:
 Implemented checkpoints:
   1  detect and expand the mounted root LVM using VG space already available
   2  configure the two-NIC local network with a rollback guard
-  3  configure the WireGuard administrative VPN and first client staging
+  3  configure the WireGuard administrative VPN and two client peers
 
 Future checkpoints are intentionally not implemented yet.
 EOF
@@ -61,6 +59,21 @@ if [[ "$#" -eq 1 && "$1" == '--capabilities' ]]; then
 fi
 if [[ "$#" -eq 1 && "$1" == '--protocol' ]]; then
     printf 'powerseven-bootstrap %s\ncheckpoints=%s\n' "$POWERSEVEN_BOOTSTRAP_VERSION" "$POWERSEVEN_BOOTSTRAP_CAPABILITIES"
+    exit 0
+fi
+if [[ "$#" -eq 1 && "$1" == '--peer-status' ]]; then
+    [[ "$EUID" -eq 0 ]] || { printf '%s\n' 'peer status requires root' >&2; exit 2; }
+    for peer in "${ADMIN_PEERS[@]}"; do
+        peer_name=${peer%%:*}
+        peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
+        peer_export="/tmp/powerseven-admin-$peer_name.conf"
+        if [[ -s "$peer_state" && -s "$peer_export" ]]; then status=staged
+        elif [[ -s "$peer_state" ]]; then status=exported
+        elif [[ -e "$peer_export" ]]; then status=invalid
+        else status=absent
+        fi
+        printf '%s=%s\n' "$peer_name" "$status"
+    done
     exit 0
 fi
 
@@ -676,7 +689,7 @@ rm -f '$running_marker' '$script' '$NETWORK_STATE_DIR/pending-token' '$NETWORK_S
 rm -rf '$backup'
 EOF
     chmod 700 "$script"
-    systemd-run --quiet --unit="$unit" --on-active=90s --collect /usr/bin/bash "$script"
+    systemd-run --quiet --unit="$unit" --on-active="${NETWORK_ROLLBACK_TIMEOUT_SECONDS}s" --collect /usr/bin/bash "$script"
 }
 
 rollback_network_now() {
@@ -721,11 +734,6 @@ commit_network_transaction() {
     running_marker="$NETWORK_PENDING_DIR/netplan-running-$transaction_id"
     script="$NETWORK_PENDING_DIR/netplan-rollback-$transaction_id.sh"
     unit="powerseven-netplan-rollback-$transaction_id"
-    stop_network_rollback_unit "$transaction_id"
-    if systemctl is-active --quiet "$unit.timer" 2>/dev/null || systemctl is-active --quiet "$unit.service" 2>/dev/null; then
-        report FAIL network-confirm 'rollback timer/service is still active; preserving backup and pending state'
-        return 1
-    fi
     acquire_network_lock
     pending=$(cat "$NETWORK_STATE_DIR/pending-token" 2>/dev/null || true)
     if [[ "$pending" != "$transaction_id" || ! -e "$marker" || -e "$running_marker" ]]; then
@@ -744,6 +752,12 @@ commit_network_transaction() {
         report FAIL network-confirm 'runtime or persistent Netplan validation failed; preserving rollback state'
         return 1
     fi
+    stop_network_rollback_unit "$transaction_id"
+    if systemctl is-active --quiet "$unit.timer" 2>/dev/null || systemctl is-active --quiet "$unit.service" 2>/dev/null; then
+        release_network_lock
+        report FAIL network-confirm 'rollback timer/service is still active; preserving backup and pending state'
+        return 1
+    fi
     rm -f "$marker" "$script" "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
     rm -rf "$backup"
     release_network_lock
@@ -755,13 +769,22 @@ confirm_network() {
     [[ -n "$pending" && "$pending" == "$CONFIRM_NETWORK_TRANSACTION_ID" ]] || {
         report FAIL network-confirm 'network transaction token is missing or does not match'; return 1;
     }
-    detect_network_interfaces || {
-        report FAIL network-confirm 'could not rediscover the VMnet8 and bridged interfaces'; return 1;
-    }
-    verify_network_state || {
-        report FAIL network-confirm 'post-transition network validation failed'; return 1;
-    }
-    commit_network_transaction "$CONFIRM_NETWORK_TRANSACTION_ID"
+    VMNET8_IF=$(cat "$NETWORK_STATE_DIR/underlay-interface" 2>/dev/null || true)
+    BRIDGED_IF=$(cat "$NETWORK_STATE_DIR/bridged-interface" 2>/dev/null || true)
+    if [[ ! "$VMNET8_IF" =~ ^[a-zA-Z0-9_.:-]+$ || ! "$BRIDGED_IF" =~ ^[a-zA-Z0-9_.:-]+$ || "$VMNET8_IF" == "$BRIDGED_IF" ]] ||
+       ! ip link show dev "$VMNET8_IF" >/dev/null 2>&1 ||
+       ! ip link show dev "$BRIDGED_IF" >/dev/null 2>&1; then
+        report FAIL network-confirm 'stored network interfaces are missing or invalid; rollback guard remains active'
+        return 1
+    fi
+    if ! wait_for_network_state; then
+        report FAIL network-confirm 'network readiness timed out; rollback guard remains active'
+        return 1
+    fi
+    if ! commit_network_transaction "$CONFIRM_NETWORK_TRANSACTION_ID"; then
+        report FAIL network-confirm 'validated network could not be committed; rollback guard remains active'
+        return 1
+    fi
     report PASS network-confirm 'DHCP-to-static network transition committed'
 }
 
@@ -837,37 +860,54 @@ ensure_wireguard_server_keys() {
     [[ -s "$WG_SERVER_KEY" && -s "$WG_SERVER_PUB" ]] || return 1
 }
 
-ensure_wireguard_config() {
-    local server_private_key client_public_key
+admin_peer_address() {
+    local peer
+    for peer in "${ADMIN_PEERS[@]}"; do
+        if [[ "${peer%%:*}" == "$1" ]]; then printf '%s\n' "${peer#*:}"; return 0; fi
+    done
+    return 1
+}
+
+ensure_wireguard_config() (
+    local server_private_key client_public_key previous_public='' peer peer_name peer_address peer_state temporary_config
+    trap 'rm -f "${temporary_config:-}"' EXIT
+    [[ ! -e "$WG_CLIENT_STATE_DIR/powerseven-admin-laptop.pub" ]] || {
+        report FAIL admin-vpn-client 'legacy single-peer identity needs explicit rotation; refusing duplicate address'; return 1;
+    }
     server_private_key=$(cat "$WG_SERVER_KEY")
     install -d -m 0700 /etc/wireguard
-    if [[ ! -f "$WG_CONFIG" ]]; then
-        umask 077
-        cat > "$WG_CONFIG" <<EOF
+    temporary_config=$(mktemp /etc/wireguard/.wg-admin.XXXXXX)
+    chmod 600 "$temporary_config"
+    cat > "$temporary_config" <<EOF
 [Interface]
 Address = $ADMIN_SERVER_ADDRESS
 ListenPort = $WG_PORT
 PrivateKey = $server_private_key
 EOF
-    fi
-    chmod 600 "$WG_CONFIG"
-    if [[ -f "$WG_CLIENT_STATE" ]]; then
-        client_public_key=$(tr -d '[:space:]' < "$WG_CLIENT_STATE")
+    for peer in "${ADMIN_PEERS[@]}"; do
+        peer_name=${peer%%:*}; peer_address=${peer#*:}
+        peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
+        [[ -f "$peer_state" ]] || continue
+        client_public_key=$(tr -d '[:space:]' < "$peer_state")
         if [[ ! "$client_public_key" =~ ^[A-Za-z0-9+/]{40,}={0,2}$ ]]; then
             report FAIL admin-vpn-client 'stored client public key is invalid'
             return 1
         fi
-        if ! grep -Fq "PublicKey = $client_public_key" "$WG_CONFIG"; then
-            cat >> "$WG_CONFIG" <<EOF
+        if [[ "$client_public_key" == "$previous_public" ]]; then
+            report FAIL admin-vpn-client 'two peers share a public key; explicit rotation is required'
+            return 1
+        fi
+        previous_public=$client_public_key
+        cat >> "$temporary_config" <<EOF
 
 [Peer]
 PublicKey = $client_public_key
-AllowedIPs = $ADMIN_CLIENT_ADDRESS
+AllowedIPs = $peer_address
 EOF
-        fi
-    fi
-    chmod 600 "$WG_CONFIG"
-}
+    done
+    install -o root -g root -m 600 "$temporary_config" "$WG_CONFIG"
+    rm -f "$temporary_config"
+)
 
 ensure_admin_firewall() {
     local firewall_file='/etc/powerseven/admin-vpn.nft'
@@ -885,8 +925,9 @@ table inet powerseven_admin {
     }
     chain forward {
         type filter hook forward priority -100; policy accept;
-        ct state established,related accept
         iifname "$WG_INTERFACE" oifname "$VMNET8_IF" ip saddr $ADMIN_NETWORK ip daddr $UNDERLAY_NETWORK accept
+        iifname "$WG_INTERFACE" drop
+        ct state established,related accept
         iifname "$BRIDGED_IF" oifname "$VMNET8_IF" drop
         iifname "$BRIDGED_IF" drop
     }
@@ -929,15 +970,21 @@ ensure_admin_forwarding() {
 }
 
 ensure_admin_client_export() (
-    local client_private client_public temporary_key temporary_config export_user export_uid export_gid
+    local peer_name="$1" peer_address peer_state peer_export client_private client_public temporary_key temporary_config export_user export_uid export_gid
+    peer_address=$(admin_peer_address "$peer_name") || { report FAIL admin-vpn-client 'unknown peer'; return 1; }
+    peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
+    peer_export="/tmp/powerseven-admin-$peer_name.conf"
     trap 'rm -f "${temporary_key:-}" "${temporary_config:-}"' EXIT
     detect_network_interfaces || { report FAIL admin-vpn 'cannot determine bridged interface for client endpoint'; return 1; }
-    if [[ -f "$WG_CLIENT_STATE" ]]; then
-        if [[ ! -f "$WG_CLIENT_EXPORT" ]]; then
-            report FAIL admin-vpn-client 'client identity already exists but its staged config is unavailable; explicit rotation is required'
-            return 1
+    if [[ -f "$peer_state" ]]; then
+        if [[ -f "$peer_export" ]]; then
+            client_private=$(sed -n 's/^PrivateKey = //p' "$peer_export")
+            [[ -n "$client_private" ]] &&
+                [[ "$(printf '%s\n' "$client_private" | wg pubkey)" == "$(tr -d '[:space:]' < "$peer_state")" ]] || {
+                report FAIL admin-vpn-client "$peer_name staged config does not match its public identity"; return 1;
+            }
         fi
-        report PASS admin-vpn-client 'existing client identity and staged config reused'
+        report PASS admin-vpn-client "$peer_name identity preserved; staged export=$([[ -f "$peer_export" ]] && printf yes || printf no)"
         return 0
     fi
 
@@ -952,32 +999,32 @@ ensure_admin_client_export() (
     wg genkey > "$temporary_key"
     client_private=$(cat "$temporary_key")
     client_public=$(printf '%s\n' "$client_private" | wg pubkey)
-    printf '%s\n' "$client_public" > "$WG_CLIENT_STATE"
-    chmod 600 "$WG_CLIENT_STATE"
-    ensure_wireguard_config
     printf '%s\n' \
         '[Interface]' \
-        "Address = $ADMIN_CLIENT_ADDRESS" \
+        "Address = $peer_address" \
         "PrivateKey = $client_private" \
-        "DNS = $UNDERLAY_DNS" \
         '' \
         '[Peer]' \
         "PublicKey = $(tr -d '[:space:]' < "$WG_SERVER_PUB")" \
         "Endpoint = ${BRIDGED_ADDRESS%/*}:$WG_PORT" \
-        "AllowedIPs = $UNDERLAY_NETWORK,10.10.10.0/24" \
+        "AllowedIPs = $UNDERLAY_NETWORK" \
         'PersistentKeepalive = 25' > "$temporary_config"
-    install -o "$export_uid" -g "$export_gid" -m 600 "$temporary_config" "$WG_CLIENT_EXPORT"
+    install -o "$export_uid" -g "$export_gid" -m 600 "$temporary_config" "$peer_export"
+    printf '%s\n' "$client_public" > "$peer_state"
+    chmod 600 "$peer_state"
+    ensure_wireguard_config
     rm -f "$temporary_key" "$temporary_config"
     systemctl enable --now "wg-quick@$WG_INTERFACE.service"
-    wg set "$WG_INTERFACE" peer "$client_public" allowed-ips "$ADMIN_CLIENT_ADDRESS"
-    report PASS admin-vpn-client 'client identity created and staged for key-only SCP export'
+    wg set "$WG_INTERFACE" peer "$client_public" allowed-ips "$peer_address"
+    report PASS admin-vpn-client "$peer_name identity created and staged for key-only SCP export"
 )
 
 cleanup_admin_client_export() {
-    [[ "$CLEANUP_CLIENT" -eq 1 ]] || return 0
-    rm -f "$WG_CLIENT_EXPORT" /tmp/.powerseven-client-key.* /tmp/.powerseven-client-config.*
-    [[ -f "$WG_CLIENT_STATE" ]] || { report FAIL admin-vpn-client 'cannot finalize client cleanup without persistent public key'; return 1; }
-    report PASS admin-vpn-client 'client private key staging removed; public peer identity retained'
+    [[ -n "$CLEANUP_CLIENT" ]] || return 0
+    admin_peer_address "$CLEANUP_CLIENT" >/dev/null || { report FAIL admin-vpn-client 'unknown peer'; return 1; }
+    [[ -f "$WG_CLIENT_STATE_DIR/$CLEANUP_CLIENT.pub" ]] || { report FAIL admin-vpn-client 'cannot finalize client cleanup without persistent public key'; return 1; }
+    rm -f "/tmp/powerseven-admin-$CLEANUP_CLIENT.conf"
+    report PASS admin-vpn-client "$CLEANUP_CLIENT private key staging removed; public peer identity retained"
 }
 
 ensure_vpn_packages() {
@@ -997,6 +1044,11 @@ ensure_vpn_packages() {
 }
 
 vpn_checkpoint() {
+    local peer peer_name peer_address peer_public
+    if [[ -n "$CLEANUP_CLIENT" ]]; then
+        cleanup_admin_client_export
+        return
+    fi
     if [[ "$MODE" == 'apply' ]]; then
         ensure_vpn_packages || return 1
     fi
@@ -1032,22 +1084,36 @@ vpn_checkpoint() {
         else
             report MISSING admin-vpn-forwarding 'IPv4 forwarding is disabled'
         fi
-        if [[ -f "$WG_CLIENT_STATE" ]]; then
-            report PASS admin-vpn-client 'persistent client public key exists'
-        else
-            report MISSING admin-vpn-client 'first client has not been staged'
-        fi
+        for peer in "${ADMIN_PEERS[@]}"; do
+            peer_name=${peer%%:*}; peer_address=${peer#*:}
+            if [[ -f "$WG_CLIENT_STATE_DIR/$peer_name.pub" ]]; then
+                peer_public=$(tr -d '[:space:]' < "$WG_CLIENT_STATE_DIR/$peer_name.pub")
+                if [[ "$peer_public" =~ ^[A-Za-z0-9+/]{40,}={0,2}$ ]] &&
+                   grep -Fq "PublicKey = $peer_public" "$WG_CONFIG" 2>/dev/null &&
+                   grep -Fq "AllowedIPs = $peer_address" "$WG_CONFIG" 2>/dev/null &&
+                   wg show "$WG_INTERFACE" allowed-ips 2>/dev/null | awk -v key="$peer_public" -v address="$peer_address" '$1 == key && $2 == address { found=1 } END { exit !found }'; then
+                    report PASS admin-vpn-client "$peer_name public identity/config/runtime valid; staged export=$([[ -f "/tmp/powerseven-admin-$peer_name.conf" ]] && printf yes || printf no)"
+                else
+                    report MISSING admin-vpn-client "$peer_name identity exists but peer config/runtime is incomplete"
+                fi
+            else
+                report MISSING admin-vpn-client "$peer_name public key missing"
+            fi
+        done
         return 0
     fi
     ensure_wireguard_server_keys
     ensure_wireguard_config
     ensure_admin_forwarding
     systemctl enable --now "wg-quick@$WG_INTERFACE.service"
-    if [[ "$CLEANUP_CLIENT" -eq 0 ]]; then
-        ensure_admin_client_export
-    else
-        cleanup_admin_client_export
-    fi
+    for peer in "${ADMIN_PEERS[@]}"; do
+        ensure_admin_client_export "${peer%%:*}"
+    done
+    for peer in "${ADMIN_PEERS[@]}"; do
+        peer_name=${peer%%:*}; peer_address=${peer#*:}
+        peer_public=$(tr -d '[:space:]' < "$WG_CLIENT_STATE_DIR/$peer_name.pub")
+        wg set "$WG_INTERFACE" peer "$peer_public" allowed-ips "$peer_address"
+    done
     ensure_admin_firewall
     report PASS admin-vpn "WireGuard $WG_INTERFACE configured at $ADMIN_SERVER_ADDRESS; bridged ingress is UDP/$WG_PORT only"
 }
@@ -1072,8 +1138,9 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --cleanup-client)
-            CLEANUP_CLIENT=1
-            shift
+            [[ $# -ge 2 ]] || { report FAIL arguments '--cleanup-client requires a peer'; exit 2; }
+            CLEANUP_CLIENT="$2"
+            shift 2
             ;;
         --help|-h) usage; exit 0 ;;
         *) report FAIL arguments "unknown argument: $1"; usage; exit 2 ;;
@@ -1093,17 +1160,23 @@ if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' ]]; t
     report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2 and 3 are implemented'
     exit 2
 fi
-if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || "$CLEANUP_CLIENT" -eq 1 ) ]]; then
+if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" ) ]]; then
     report FAIL arguments 'network/client options are valid only for checkpoints 2 or 3'
     exit 2
 fi
-if [[ "$CHECKPOINT" == '2' && "$CLEANUP_CLIENT" -eq 1 ]]; then
+if [[ "$CHECKPOINT" == '2' && -n "$CLEANUP_CLIENT" ]]; then
     report FAIL arguments '--cleanup-client is valid only for checkpoint 3'
     exit 2
 fi
 if [[ "$CHECKPOINT" == '3' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" ) ]]; then
     report FAIL arguments 'network transaction options are valid only for checkpoint 2'
     exit 2
+fi
+if [[ -n "$CLEANUP_CLIENT" ]] && ! admin_peer_address "$CLEANUP_CLIENT" >/dev/null; then
+    report FAIL arguments 'unknown admin VPN peer'; exit 2
+fi
+if [[ -n "$CLEANUP_CLIENT" && "$MODE" != 'apply' ]]; then
+    report FAIL arguments '--cleanup-client requires --apply'; exit 2
 fi
 if [[ -n "$NETWORK_TRANSACTION_ID" && ! "$NETWORK_TRANSACTION_ID" =~ ^[a-f0-9]{32}$ ]] ||
    [[ -n "$CONFIRM_NETWORK_TRANSACTION_ID" && ! "$CONFIRM_NETWORK_TRANSACTION_ID" =~ ^[a-f0-9]{32}$ ]]; then

@@ -32,7 +32,7 @@ def network_fixture_is_unambiguous(addresses: dict[str, str | None]) -> bool:
 
 
 def network_ready_fixture(state: dict[str, bool]) -> bool:
-    return all(state[key] for key in ("underlay", "default_route", "bridge_link", "bridge_ipv4", "underlay_dns")) and not state["bridge_default_route"] and not state["bridge_dns"]
+    return all(state[key] for key in ("underlay", "default_route", "bridge_link", "bridge_ipv4", "underlay_dns", "networkd", "persistence")) and not state["bridge_default_route"] and not state["bridge_dns"]
 
 
 def network_retry_fixture(states: list[dict[str, bool]], timeout: int = 45, interval: int = 2) -> bool:
@@ -111,21 +111,23 @@ def main() -> int:
     admin_plan = networks["target_local"]["address_planes"]["admin_vpn"]
     admin = networks["target_local"]["admin_vpn"]
     admin_net = ipaddress.ip_network(admin_plan["cidr"])
-    if str(admin_net) == "10.99.0.0/24" and admin_plan["server"] == "10.99.0.1/24" and admin_plan["first_client"] == "10.99.0.2/32":
+    expected_peers = {"jarvis": "10.99.0.2/32", "giorgio-laptop": "10.99.0.3/32"}
+    declared_peers = {peer["name"]: peer["address"] for peer in admin["clients"]}
+    if str(admin_net) == "10.99.0.0/24" and admin_plan["server"] == "10.99.0.1/24" and admin_plan["clients"] == expected_peers and declared_peers == expected_peers:
         report("PASS", "admin-vpn-addresses", "dedicated 10.99.0.0/24 plan is declared")
     else:
         report("FAIL", "admin-vpn-addresses", "admin VPN address plan is inconsistent")
-    if "10.10.10.0/24" not in admin["allowed_ips"] or admin["nat"]["default"] is not False:
-        report("FAIL", "routing-policy", "admin VPN must route lab overlay without making NAT the default")
+    if admin["allowed_ips"] != ["192.168.214.0/24"] or admin["nat"]["default"] is not False:
+        report("FAIL", "routing-policy", "admin VPN must use VMnet8-only split tunnel and no NAT")
     else:
-        report("PASS", "routing-policy", "no masquerade default; lab overlay is future/allowed routing")
+        report("PASS", "routing-policy", "VMnet8-only split tunnel; Internet stays outside VPN")
     route = admin["return_routes"]["dc02"]
     if route == {"destination": "10.99.0.0/24", "via": "192.168.214.14"}:
         report("PASS", "dc02-route", "persistent return route target is declared")
     else:
         report("FAIL", "dc02-route", "DC02 return route is incomplete")
 
-    if all(token in bootstrap for token in ("network_checkpoint", "vpn_checkpoint", "--confirm-network", "wg-admin", "10.99.0.1/24", "10.99.0.2/32")):
+    if all(token in bootstrap for token in ("network_checkpoint", "vpn_checkpoint", "--confirm-network", "wg-admin", "10.99.0.1/24", "jarvis:10.99.0.2/32", "giorgio-laptop:10.99.0.3/32")):
         report("PASS", "linux-bootstrap", "CP2/CP3 and rollback/client paths exist")
     else:
         report("FAIL", "linux-bootstrap", "CP2/CP3 implementation markers are incomplete")
@@ -156,7 +158,7 @@ def main() -> int:
         report("PASS", "network-retry", "post-apply DHCP validation is bounded and rolls back on timeout")
     else:
         report("FAIL", "network-retry", "post-apply network retry/timeout guard is incomplete")
-    ready = {"underlay": True, "default_route": True, "bridge_link": True, "bridge_ipv4": True, "underlay_dns": True, "bridge_default_route": False, "bridge_dns": False}
+    ready = {"underlay": True, "default_route": True, "bridge_link": True, "bridge_ipv4": True, "underlay_dns": True, "networkd": True, "persistence": True, "bridge_default_route": False, "bridge_dns": False}
     pending = dict(ready, underlay=False, default_route=False, bridge_ipv4=False, underlay_dns=False)
     static_pending = dict(ready, bridge_ipv4=False)
     route_error = dict(ready, bridge_default_route=True)
@@ -205,10 +207,48 @@ def main() -> int:
     if (all(actual == expected for actual, expected in persistence_cases) and
             all(token in bootstrap for token in persistence_tokens) and
             commit_match and
-            commit_body.find("netplan_persistence_is_valid") < commit_body.find('rm -rf "$backup"')):
+            commit_body.find("netplan_persistence_is_valid") < commit_body.find('stop_network_rollback_unit') < commit_body.find('rm -rf "$backup"')):
         report("PASS", "network-persistence-fixtures", "missing/invalid Netplan is remediation, commit validates before cleanup, rollback transactions are isolated and reboot-reconstructible")
     else:
         report("FAIL", "network-persistence-fixtures", "CP2 persistence/transaction fixture coverage failed")
+    confirm_match = re.search(r"confirm_network\(\) \{(?P<body>.*?)(?=\n\}\n\nnetwork_checkpoint\(\))", bootstrap, re.DOTALL)
+    confirm_body = confirm_match.group("body") if confirm_match else ""
+    bridge_pending = dict(ready, bridge_ipv4=False)
+    networkd_pending = dict(ready, networkd=False)
+    persistence_missing = dict(ready, persistence=False)
+    confirm_fixtures = (
+        network_retry_fixture([networkd_pending] * 10 + [ready]),
+        network_retry_fixture([bridge_pending] * 15 + [ready]),
+        not network_retry_fixture([bridge_pending] * 24),
+        not network_retry_fixture([persistence_missing] * 24),
+        not persistence_fixture(True, False),
+        persistence_fixture(True, True),
+    )
+    if (confirm_match and all(confirm_fixtures) and
+            confirm_body.find("wait_for_network_state") < confirm_body.find("commit_network_transaction") and
+            "verify_network_state" not in confirm_body and
+            "NETWORK_ROLLBACK_TIMEOUT_SECONDS=180" in bootstrap and
+            "-TimeoutSeconds 60" in runner and
+            "network transition SSH session" in runner):
+        report("PASS", "network-confirm-fixtures", "delayed networkd/DHCP wait, timeout, persistence and rollback window are covered")
+    else:
+        report("FAIL", "network-confirm-fixtures", "confirmation can commit early or outlive its rollback guard")
+    cp3_match = re.search(r"vpn_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nwhile \[\[ \$# -gt 0 \]\])", bootstrap, re.DOTALL)
+    cp3_body = cp3_match.group("body") if cp3_match else ""
+    if (cp3_match and
+            "ADMIN_PEERS" in cp3_body and
+            "ensure_admin_client_export" in cp3_body and
+            'iifname "$WG_INTERFACE" drop' in bootstrap and
+            '"AllowedIPs = $UNDERLAY_NETWORK"' in bootstrap and
+            "10.10.10.0/24" not in cp3_body and
+            "giorgio-laptop" in runner and "jarvis" in runner and
+            "--peer-status" in bootstrap and "--peer-status" in runner and
+            "Invoke-NativeCapture $script:Ssh" in runner and
+            "Test-NativeSuccess $script:Ssh ($keyOnlySshOptions + @($target, 'test'" not in runner and
+            "explicit rotation is required" in runner):
+        report("PASS", "two-peer-vpn-fixtures", "independent allowlisted peers, split tunnel and lost-key safety are declared")
+    else:
+        report("FAIL", "two-peer-vpn-fixtures", "two-peer VPN state/export/split-tunnel guards are incomplete")
     if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
@@ -237,7 +277,7 @@ def main() -> int:
         report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
     else:
         report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
-    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
+    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
@@ -247,11 +287,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='7'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='8'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '7'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '8'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -276,10 +316,10 @@ def main() -> int:
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 7\ncheckpoints=1,2,3\n", "7", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "7", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "7", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "7", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 8\ncheckpoints=1,2,3\n", "8", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "8", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "8", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "8", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")

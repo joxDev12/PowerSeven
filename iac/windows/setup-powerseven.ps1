@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '7'
+$requiredBootstrapVersion = '8'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -621,7 +621,8 @@ function New-RemoteCheckpointArguments {
         [string]$Checkpoint
     )
     if ($ExtraOption -eq '--cleanup-client') {
-        $arguments += $ExtraOption
+        if ($ExtraValue -notin @('jarvis', 'giorgio-laptop')) { throw 'Unknown admin VPN peer' }
+        $arguments += @($ExtraOption, $ExtraValue)
     } elseif (-not [string]::IsNullOrWhiteSpace($ExtraOption)) {
         if ([string]::IsNullOrWhiteSpace($ExtraValue) -or $ExtraValue -notmatch '^[a-f0-9]{32}$') {
             throw 'Remote transaction token must be a 32-character hexadecimal value'
@@ -641,11 +642,11 @@ function New-RemoteBootstrapFiles {
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' || "$1" == '--protocol' ) ]]; then
+if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' || "$1" == '--protocol' || "$1" == '--peer-status' ) ]]; then
     exec /usr/local/lib/powerseven/bootstrap.sh "$@"
 fi
 
-if [[ "$#" -ne 3 && "$#" -ne 4 && "$#" -ne 5 ]]; then
+if [[ "$#" -ne 3 && "$#" -ne 5 ]]; then
     echo 'usage: powerseven-bootstrap --check|--apply --checkpoint N' >&2
     exit 2
 fi
@@ -665,24 +666,21 @@ case "$3" in
     *) echo 'checkpoint is not allowlisted' >&2; exit 2 ;;
 esac
 
-if [[ "$#" -eq 4 ]]; then
-    if [[ "$3" != '3' || "$4" != '--cleanup-client' || "$1" != '--apply' ]]; then
-        echo 'invalid extended checkpoint arguments' >&2
-        exit 2
-    fi
-fi
 if [[ "$#" -eq 5 ]]; then
-    if [[ "$1" != '--apply' || "$3" != '2' ]]; then
+    if [[ "$1" != '--apply' ]]; then
         echo 'invalid extended checkpoint arguments' >&2
         exit 2
     fi
-    if [[ "$4" != '--network-token' && "$4" != '--confirm-network' ]]; then
-        echo 'invalid extended checkpoint arguments' >&2
-        exit 2
-    fi
-    if [[ ! "$5" =~ ^[a-f0-9]{32}$ ]]; then
-        echo 'invalid transaction token' >&2
-        exit 2
+    if [[ "$3" == '2' ]]; then
+        if [[ "$4" != '--network-token' && "$4" != '--confirm-network' ]] || [[ ! "$5" =~ ^[a-f0-9]{32}$ ]]; then
+            echo 'invalid network transaction token' >&2; exit 2
+        fi
+    elif [[ "$3" == '3' ]]; then
+        if [[ "$4" != '--cleanup-client' || "$5" != 'jarvis' && "$5" != 'giorgio-laptop' ]]; then
+            echo 'invalid admin VPN peer' >&2; exit 2
+        fi
+    else
+        echo 'invalid extended checkpoint arguments' >&2; exit 2
     fi
 fi
 
@@ -821,13 +819,13 @@ function Restore-DC02RdpFirewall {
 }
 
 function Test-AdminClientConfig {
-    param([string]$Path)
+    param([string]$Path, [string]$Address)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $content = Get-Content -LiteralPath $Path -Raw
     return ($content -match '(?m)^\[Interface\]$' -and
-        $content -match '(?m)^Address = 10\.99\.0\.2/32$' -and
+        $content -match ("(?m)^Address = {0}$" -f [regex]::Escape($Address)) -and
         $content -match '(?m)^\[Peer\]$' -and
-        $content -match '(?m)^AllowedIPs = 192\.168\.214\.0/24,10\.10\.10\.0/24$' -and
+        $content -match '(?m)^AllowedIPs = 192\.168\.214\.0/24$' -and
         $content -match '(?m)^PrivateKey = \S+$')
 }
 
@@ -1172,7 +1170,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 7\ncheckpoints=1,2,3')"
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 8\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1236,14 +1234,14 @@ sudo rm -rf "$backup" "$stage"
 
         $networkToken = [guid]::NewGuid().ToString('N')
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '2' -ExtraOption '--network-token' -ExtraValue $networkToken)
-        Write-Result 'INFO' 'checkpoint' 'network transition may close the current DHCP SSH session'
+        Write-Result 'INFO' 'checkpoint' 'network transition may close the current SSH session'
         Write-Result 'INFO' 'checkpoint' 'remote command=sudo -n /usr/local/sbin/powerseven-bootstrap --apply --checkpoint 2 --network-token <redacted>'
         $transitionResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckpointArguments) -TimeoutSeconds 15
         Write-NativeResultOutput -Result $transitionResult
         if ($transitionResult.TimedOut) {
-            Write-Result 'WARN' 'checkpoint' 'old DHCP SSH session exceeded its bounded handoff window; validating the static address'
+            Write-Result 'WARN' 'checkpoint' 'network transition SSH session exceeded its bounded handoff window; validating the static address'
         } elseif ($transitionResult.ExitCode -ne 0) {
-            Write-Result 'WARN' 'checkpoint' ("old DHCP SSH session ended with exit code {0}; validating the static address" -f $transitionResult.ExitCode)
+            Write-Result 'WARN' 'checkpoint' ("network transition SSH session ended with exit code {0}; validating the static address" -f $transitionResult.ExitCode)
         }
 
         $Vps14Address = '192.168.214.14'
@@ -1296,7 +1294,7 @@ sudo rm -rf "$backup" "$stage"
 
         $confirmArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '2' -ExtraOption '--confirm-network' -ExtraValue $networkToken)
         Write-Result 'INFO' 'checkpoint' 'remote command=sudo -n /usr/local/sbin/powerseven-bootstrap --apply --checkpoint 2 --confirm-network <redacted>'
-        $confirmResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments) -TimeoutSeconds 20
+        $confirmResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments) -TimeoutSeconds 60
         Write-NativeResultOutput -Result $confirmResult
         if ($confirmResult.TimedOut) {
             throw 'VPS14 network confirmation exceeded the bounded timeout; rollback guard remains active'
@@ -1311,37 +1309,69 @@ sudo rm -rf "$backup" "$stage"
         }
     } elseif ($Checkpoint -eq '3' -and $Apply) {
         $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
-        $clientConfigPath = Join-Path $clientDirectory 'powerseven-admin-laptop.conf'
-        $localConfigExists = Test-Path -LiteralPath $clientConfigPath -PathType Leaf
-        if ($localConfigExists) { Set-RestrictedAcl -Path $clientConfigPath -Directory $false }
-        if ($localConfigExists -and -not (Test-AdminClientConfig -Path $clientConfigPath)) {
-            throw 'existing local admin client config is invalid; refusing automatic identity replacement'
+        $adminPeers = @(
+            @{ Name = 'jarvis'; Address = '10.99.0.2/32' },
+            @{ Name = 'giorgio-laptop'; Address = '10.99.0.3/32' }
+        )
+        $peerStatusResult = Invoke-NativeCapture $script:Ssh ($keyOnlySshOptions + @($target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--peer-status'))
+        if ($peerStatusResult.ExitCode -ne 0) { throw 'remote admin VPN peer-state probe failed' }
+        $peerStatusText = $peerStatusResult.StandardOutput.Replace("`r", '').Trim()
+        $expectedPeerStatus = "jarvis=(absent|staged|exported)`ngiorgio-laptop=(absent|staged|exported)"
+        if ($peerStatusText -notmatch ("\A{0}\z" -f $expectedPeerStatus)) {
+            throw 'remote admin VPN peer-state protocol is invalid'
         }
-        $checkArguments = @(New-RemoteCheckpointArguments -Action '--check' -Checkpoint '3')
-        $remoteReady = Test-NativeSuccess $script:Ssh ($keyOnlySshOptions + @($target) + $checkArguments)
-        if ($localConfigExists -and -not $remoteReady) {
-            throw 'VPS14 has no matching usable admin VPN state for the existing local client config; explicit rotation is required'
+        $peerStatuses = @{}
+        foreach ($line in ($peerStatusText -split "`n")) {
+            $parts = $line.Trim() -split '=', 2
+            $peerStatuses[$parts[0]] = $parts[1]
         }
-        if (-not $localConfigExists) {
-            $applyArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3')
-            Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($applyArguments -join ' '))
-            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)
-            $remoteClientStaged = $true
-            $temporaryClientPath = Join-Path $clientDirectory ('.powerseven-admin-laptop.conf.' + [guid]::NewGuid().ToString('N'))
-            Invoke-Native $script:Scp ($keyOnlySshOptions + @($target + ':/tmp/powerseven-admin-laptop.conf', $temporaryClientPath))
-            Set-RestrictedAcl -Path $temporaryClientPath -Directory $false
-            if (-not (Test-AdminClientConfig -Path $temporaryClientPath)) {
-                throw 'downloaded admin client configuration failed local structural validation'
+        foreach ($peer in $adminPeers) {
+            $peer.Path = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $peer.Name)
+            $peer.LocalExists = Test-Path -LiteralPath $peer.Path -PathType Leaf
+            if ($peer.LocalExists) {
+                Set-RestrictedAcl -Path $peer.Path -Directory $false
+                if (-not (Test-AdminClientConfig -Path $peer.Path -Address $peer.Address)) {
+                    throw "existing $($peer.Name) config is invalid; explicit rotation is required"
+                }
             }
-            Move-Item -LiteralPath $temporaryClientPath -Destination $clientConfigPath -Force
-            $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client')
+            $peer.RemoteExists = $peerStatuses[$peer.Name] -ne 'absent'
+            $peer.Staged = $peerStatuses[$peer.Name] -eq 'staged'
+            if ($peer.LocalExists -and -not $peer.RemoteExists) {
+                throw "$($peer.Name) local config exists but remote public identity is missing; explicit rotation is required"
+            }
+            if (-not $peer.LocalExists -and $peer.RemoteExists -and -not $peer.Staged) {
+                throw "$($peer.Name) private config is lost; explicit rotation is required"
+            }
+        }
+        $applyArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3')
+        Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($applyArguments -join ' '))
+        Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)
+        foreach ($peer in $adminPeers) {
+            if (-not $peer.LocalExists) {
+                $temporaryClientPath = Join-Path $clientDirectory ('.powerseven-admin-' + $peer.Name + '.' + [guid]::NewGuid().ToString('N'))
+                try {
+                    Invoke-Native $script:Scp ($keyOnlySshOptions + @($target + ":/tmp/powerseven-admin-$($peer.Name).conf", $temporaryClientPath))
+                    Set-RestrictedAcl -Path $temporaryClientPath -Directory $false
+                    if (-not (Test-AdminClientConfig -Path $temporaryClientPath -Address $peer.Address)) {
+                        throw "downloaded $($peer.Name) config failed structural validation"
+                    }
+                    Move-Item -LiteralPath $temporaryClientPath -Destination $peer.Path
+                } finally {
+                    if (Test-Path -LiteralPath $temporaryClientPath) { Remove-Item -LiteralPath $temporaryClientPath -Force }
+                }
+                Write-Result 'PASS' 'admin-client' "$($peer.Name) config exported to $($peer.Path)"
+            } else {
+                Write-Result 'PASS' 'admin-client' "$($peer.Name) identity/config reused"
+            }
+        }
+        $privateKeys = @($adminPeers | ForEach-Object {
+            $content = Get-Content -LiteralPath $_.Path -Raw
+            [regex]::Match($content, '(?m)^PrivateKey = (\S+)').Groups[1].Value
+        })
+        if ($privateKeys[0] -eq $privateKeys[1]) { throw 'admin VPN peers share a private key; explicit rotation is required' }
+        foreach ($peer in $adminPeers) {
+            $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client' -ExtraValue $peer.Name)
             Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $cleanupArguments)
-            $remoteClientStaged = $false
-            Write-Result 'PASS' 'admin-client' "client config exported to $clientConfigPath"
-        } else {
-            $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client')
-            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $cleanupArguments)
-            Write-Result 'PASS' 'admin-client' 'existing client identity/config reused; no new key generated'
         }
         $rdpPath = New-LocalRdpFile -Directory $clientDirectory
         Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
@@ -1354,15 +1384,7 @@ sudo rm -rf "$backup" "$stage"
     }
 }
 catch {
-    if ($remoteClientStaged) {
-        try {
-            $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client')
-            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $cleanupArguments)
-        }
-        catch {
-            Write-Result 'WARN' 'admin-client' 'remote client staging cleanup could not be confirmed; no new identity will be generated automatically'
-        }
-    }
+    # Unexported staged client secrets remain for a safe retry; never rotate silently.
     Restore-DC02RdpFirewall -FirewallState $localFirewallState
     Remove-DC02AdminRoute -RouteState $localRouteState
     throw
