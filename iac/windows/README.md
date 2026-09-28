@@ -55,9 +55,10 @@ la discovery automatica DHCP resta un'estensione successiva.
 .\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 3
 ```
 
-`-Check` richiede una chiave PowerSeven già presente e verifica SSH key-only,
-bootstrap contract version `6`, capabilities e checkpoint remoto senza staging,
-SCP, password o mutazioni. Exit code `10` indica remediation necessaria ma
+`-Check` richiede una chiave PowerSeven già presente; combina verifica SSH
+key-only, bootstrap contract `--protocol` e capabilities in una sessione, poi
+esegue il checkpoint read-only in una seconda sessione. Non fa staging, SCP,
+password o mutazioni. Exit code `10` indica remediation necessaria ma
 nessun errore tecnico; un exit code diverso da zero indica un errore reale.
 `-PrepareBootstrap` usa il flusso transazionale sudo già validato e si ferma
 dopo la migrazione, senza eseguire il checkpoint.

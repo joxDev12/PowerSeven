@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '6'
+$requiredBootstrapVersion = '7'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -556,30 +556,29 @@ function Test-BootstrapProtocol {
         $sshOptions += @('-o', "HostKeyAlias=$HostKeyAlias")
     }
 
-    if (-not (Test-NativeSuccess $SshPath ($sshOptions + @($Target, 'test', '-x', '/usr/local/sbin/powerseven-bootstrap')))) {
-        return $false
+    $probe = Invoke-NativeCapture $SshPath ($sshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--protocol'))
+    $output = ([string]$probe.StandardOutput).Trim()
+    $authenticated = $probe.ExitCode -ne 255
+    if (-not $authenticated) {
+        return [pscustomobject]@{ Authenticated = $false; Supported = $false }
     }
-    if (-not (Test-NativeSuccess $SshPath ($sshOptions + @($Target, 'test', '-f', '/usr/local/lib/powerseven/bootstrap.sh')))) {
-        return $false
-    }
-
-    $versionResult = Invoke-NativeCapture $SshPath ($sshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--version'))
-    if ($versionResult.ExitCode -ne 0 -or ([string]$versionResult.StandardOutput).Trim() -cne ('powerseven-bootstrap {0}' -f $RequiredVersion)) {
-        return $false
+    if ($probe.ExitCode -ne 0) {
+        return [pscustomobject]@{ Authenticated = $true; Supported = $false }
     }
 
-    $capabilitiesResult = Invoke-NativeCapture $SshPath ($sshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--capabilities'))
-    $capabilities = ([string]$capabilitiesResult.StandardOutput).Trim()
-    if ($capabilitiesResult.ExitCode -ne 0 -or $capabilities -cne $RequiredCapabilities) {
-        return $false
+    $protocolLines = @($output -split '\r?\n')
+    if ($protocolLines.Count -ne 2 -or
+        $protocolLines[0] -cne ('powerseven-bootstrap {0}' -f $RequiredVersion) -or
+        $protocolLines[1] -cne $RequiredCapabilities) {
+        return [pscustomobject]@{ Authenticated = $true; Supported = $false }
     }
 
-    $capabilityMatch = [regex]::Match($capabilities, '^checkpoints=(?<values>[1-9][0-9]*(?:,[1-9][0-9]*)*)$')
+    $capabilityMatch = [regex]::Match($protocolLines[1], '^checkpoints=(?<values>[1-9][0-9]*(?:,[1-9][0-9]*)*)$')
     if (-not $capabilityMatch.Success -or
         (($capabilityMatch.Groups['values'].Value -split ',') -notcontains $RequiredCheckpoint)) {
-        return $false
+        return [pscustomobject]@{ Authenticated = $true; Supported = $false }
     }
-    return $true
+    return [pscustomobject]@{ Authenticated = $true; Supported = $true }
 }
 
 function Test-ExistingBootstrapInstallation {
@@ -594,11 +593,11 @@ function Test-ExistingBootstrapInstallation {
         [string]$RequiredCheckpoint
     )
 
-    $protocolSupported = Test-BootstrapProtocol -SshPath $SshPath -KeyPath $KeyPath -Target $Target -RequiredVersion $RequiredVersion -RequiredCapabilities $RequiredCapabilities -HostKeyAlias $HostKeyAlias -RequiredCheckpoint $RequiredCheckpoint
-    if (-not $protocolSupported) {
-        return [pscustomobject]@{ Ready = $false; ProtocolSupported = $false }
+    $protocol = Test-BootstrapProtocol -SshPath $SshPath -KeyPath $KeyPath -Target $Target -RequiredVersion $RequiredVersion -RequiredCapabilities $RequiredCapabilities -HostKeyAlias $HostKeyAlias -RequiredCheckpoint $RequiredCheckpoint
+    if (-not $protocol.Authenticated -or -not $protocol.Supported) {
+        return [pscustomobject]@{ Ready = $false; Authenticated = $protocol.Authenticated; ProtocolSupported = $false }
     }
-    return [pscustomobject]@{ Ready = $true; ProtocolSupported = $true }
+    return [pscustomobject]@{ Ready = $true; Authenticated = $true; ProtocolSupported = $true }
 }
 
 function New-RemoteCheckpointArguments {
@@ -642,7 +641,7 @@ function New-RemoteBootstrapFiles {
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' ) ]]; then
+if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' || "$1" == '--protocol' ) ]]; then
     exec /usr/local/lib/powerseven/bootstrap.sh "$@"
 fi
 
@@ -917,15 +916,6 @@ if ($Checkpoint -in @('2', '3') -and $Vps14Address -ne '192.168.214.14') {
     }
 }
 
-Write-Result 'INFO' 'ssh-key-auth' 'probing existing key-only authentication; no password prompt expected'
-$sshKeyAuthentication = Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias
-if (-not $sshKeyAuthentication -and $Vps14Address -eq '192.168.214.14' -and [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
-    if (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias '192.168.214.145') {
-        $targetHostKeyAlias = '192.168.214.145'
-        $sshKeyAuthentication = $true
-        Write-Result 'PASS' 'vps14-hostkey' 'static address verified against the trusted DHCP host identity'
-    }
-}
 $keyOnlySshOptions = @(
     '-o', 'BatchMode=yes',
     '-o', 'PasswordAuthentication=no',
@@ -937,6 +927,54 @@ $keyOnlySshOptions = @(
 )
 if (-not [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
     $keyOnlySshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
+}
+
+if ($Check) {
+    Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access and bootstrap protocol in one remote probe'
+    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
+    if (-not $bootstrapProbe.Authenticated -and $Vps14Address -eq '192.168.214.14' -and [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+        $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias '192.168.214.145' -RequiredCheckpoint $Checkpoint
+        if ($bootstrapProbe.Authenticated) {
+            $targetHostKeyAlias = '192.168.214.145'
+            $keyOnlySshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
+            Write-Result 'PASS' 'vps14-hostkey' 'static address verified against the trusted DHCP host identity'
+        }
+    }
+    if (-not $bootstrapProbe.Authenticated) {
+        Write-Result 'FAIL' 'ssh-key-auth' 'key-only SSH authentication or host identity verification failed'
+        exit 1
+    }
+    Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
+    if (-not $bootstrapProbe.ProtocolSupported) {
+        Write-Result 'WARN' 'bootstrap' ("installed version/capabilities do not support checkpoint {0}" -f $Checkpoint)
+        Write-Result 'MISSING' 'bootstrap' 'migration required; no remote mutation was performed'
+        exit 10
+    }
+    Write-Result 'PASS' 'bootstrap' 'version and capabilities support the requested checkpoint'
+    $remoteCheckArguments = @(New-RemoteCheckpointArguments -Action '--check' -Checkpoint $Checkpoint)
+    Write-Result 'INFO' 'checkpoint' ("mode=check checkpoint={0}" -f $Checkpoint)
+    Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($remoteCheckArguments -join ' '))
+    $remoteCheck = Invoke-NativeReadOnly $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckArguments)
+    if ($remoteCheck.ExitCode -eq 0 -and -not $remoteCheck.HasRemediation) {
+        Write-Result 'PASS' 'powerseven-bootstrap' "--check --checkpoint $Checkpoint completed"
+        exit 0
+    }
+    if ($remoteCheck.HasRemediation) {
+        Write-Result 'WARN' 'checkpoint' 'remote check completed; remediation is required and no mutation was performed'
+        exit 10
+    }
+    Write-Result 'FAIL' 'checkpoint' ("remote read-only check failed with exit code {0}" -f $remoteCheck.ExitCode)
+    exit 1
+}
+
+Write-Result 'INFO' 'ssh-key-auth' 'probing existing key-only authentication; no password prompt expected'
+$sshKeyAuthentication = Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias
+if (-not $sshKeyAuthentication -and $Vps14Address -eq '192.168.214.14' -and [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+    if (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias '192.168.214.145') {
+        $targetHostKeyAlias = '192.168.214.145'
+        $sshKeyAuthentication = $true
+        Write-Result 'PASS' 'vps14-hostkey' 'static address verified against the trusted DHCP host identity'
+    }
 }
 if (-not $sshKeyAuthentication) {
     if ($Check -or $PrepareBootstrap) {
@@ -1034,36 +1072,10 @@ if [ -f "$auth" ]; then chmod 600 "$auth"; fi
     $cleanupEnrollmentCommand = 'rm -f "$HOME/.ssh/{0}" "$HOME/.ssh/{1}"' -f $enrollmentBackupName, $enrollmentMarkerName
     $cleanupEnrollmentCommand = ConvertTo-LinuxLf -Name 'SSH enrollment cleanup command' -Content $cleanupEnrollmentCommand
     Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $cleanupEnrollmentCommand))
+    $sshKeyAuthentication = $true
     Write-Result 'PASS' 'ssh-enrollment' 'key-only authentication verified'
 }
-if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias)) {
-    throw 'SSH key authentication failed after enrollment'
-}
 Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
-
-if ($Check) {
-    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
-    if (-not $bootstrapProbe.ProtocolSupported) {
-        Write-Result 'WARN' 'bootstrap' ("installed version/capabilities do not support checkpoint {0}" -f $Checkpoint)
-        Write-Result 'MISSING' 'bootstrap' 'migration required; no remote mutation was performed'
-        exit 10
-    }
-    Write-Result 'PASS' 'bootstrap' 'version and capabilities support the requested checkpoint'
-    $remoteCheckArguments = @(New-RemoteCheckpointArguments -Action '--check' -Checkpoint $Checkpoint)
-    Write-Result 'INFO' 'checkpoint' ("mode=check checkpoint={0}" -f $Checkpoint)
-    Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($remoteCheckArguments -join ' '))
-    $remoteCheck = Invoke-NativeReadOnly $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckArguments)
-    if ($remoteCheck.ExitCode -eq 0 -and -not $remoteCheck.HasRemediation) {
-        Write-Result 'PASS' 'powerseven-bootstrap' "--check --checkpoint $Checkpoint completed"
-        exit 0
-    }
-    if ($remoteCheck.HasRemediation) {
-        Write-Result 'WARN' 'checkpoint' 'remote check completed; remediation is required and no mutation was performed'
-        exit 10
-    }
-    Write-Result 'FAIL' 'checkpoint' ("remote read-only check failed with exit code {0}" -f $remoteCheck.ExitCode)
-    exit 1
-}
 
 $temporaryFiles = $null
 $remoteStageDir = $null
@@ -1160,8 +1172,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --version)" = 'powerseven-bootstrap 6'
-test "$(sudo "$wrapper" --capabilities)" = 'checkpoints=1,2,3'
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 7\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"

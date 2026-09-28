@@ -67,6 +67,18 @@ def cold_state_fixture(persistent_ready: bool) -> bool:
     return persistent_ready
 
 
+def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, duplicate_auth_sessions: int) -> int:
+    return protocol_probe_sessions + checkpoint_sessions + duplicate_auth_sessions
+
+
+def protocol_probe_fixture(exit_code: int, stderr: str, output: str, version: str, capabilities: str, checkpoint: str) -> tuple[bool, bool]:
+    transport_failure = exit_code == 255 or bool(re.search(r"(?i)(permission denied|host key verification failed|connection timed out|connection refused|no route to host)", stderr))
+    authenticated = not transport_failure
+    supported_checkpoints = capabilities.partition("=")[2].split(",")
+    supported = authenticated and exit_code == 0 and output.strip().splitlines() == [f"powerseven-bootstrap {version}", capabilities] and checkpoint in supported_checkpoints
+    return authenticated, supported
+
+
 def transaction_isolation_fixture(old_transaction: str, new_transaction: str) -> bool:
     return old_transaction != new_transaction
 
@@ -225,7 +237,7 @@ def main() -> int:
         report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
     else:
         report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
-    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
+    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
@@ -235,24 +247,50 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='6'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
-        report("PASS", "bootstrap-protocol", "version and checkpoint capabilities are explicitly exposed")
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='7'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+        report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '6'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '7'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
     protocol_match = re.search(r"function Test-BootstrapProtocol\b(?P<body>.*?)(?=\nfunction Test-ExistingBootstrapInstallation\b)", runner, re.DOTALL)
     protocol_body = protocol_match.group("body") if protocol_match else ""
-    if protocol_match and all(token in protocol_body for token in ("Invoke-NativeCapture", "'test', '-x'", "'test', '-f'", "'--version'", "'--capabilities'", "StandardOutput", "capabilityMatch")) and "sh -c" not in protocol_body:
-        report("PASS", "bootstrap-protocol-probe", "protocol uses separate read-only probes and parses capabilities locally")
+    if protocol_match and all(token in protocol_body for token in ("Invoke-NativeCapture", "'--protocol'", "StandardOutput", "capabilityMatch", "BatchMode=yes", "PasswordAuthentication=no", "IdentitiesOnly=yes")) and protocol_body.count("Invoke-NativeCapture") == 1 and "sh -c" not in protocol_body:
+        report("PASS", "bootstrap-protocol-probe", "one key-only SSH call returns protocol data, parsed locally")
     else:
-        report("FAIL", "bootstrap-protocol-probe", "protocol probe still relies on a fragile shell expression or lacks local parsing")
+        report("FAIL", "bootstrap-protocol-probe", "protocol probe is redundant, fragile, or lacks local parsing")
     if protocol_match and all(token in protocol_body for token in ("BatchMode=yes", "PasswordAuthentication=no", "IdentitiesOnly=yes", "sudo', '-n'")) and not any(token in protocol_body for token in ("Invoke-NativeInteractive", "Invoke-Native $script:Scp", "install ',", "rm ',")):
         report("PASS", "bootstrap-protocol-readonly", "protocol detection is key-only and read-only")
     else:
         report("FAIL", "bootstrap-protocol-readonly", "protocol detection can prompt or mutate the remote host")
+    check_flow_match = re.search(r"if \(\$Check\) \{\n    Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access.*?(?P<body>.*?)\n\}\n\nWrite-Result 'INFO' 'ssh-key-auth'", runner, re.DOTALL)
+    check_flow = check_flow_match.group("body") if check_flow_match else ""
+    if (check_flow_match and
+            "Test-ExistingBootstrapInstallation" in check_flow and
+            not re.search(r"\bTest-SshKeyAuthentication\b", check_flow) and
+            check_flow.count("Invoke-NativeReadOnly") == 1 and
+            check_ssh_session_count(1, 1, 0) == 2):
+        report("PASS", "check-ssh-session-budget", "normal Check uses one protocol/auth SSH session plus one checkpoint session")
+    else:
+        report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
+    protocol_fixtures = (
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 7\ncheckpoints=1,2,3\n", "7", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "7", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "7", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "7", "checkpoints=1,2,3", "2"), (False, False)),
+    )
+    if all(actual == expected for actual, expected in protocol_fixtures):
+        report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")
+    else:
+        report("FAIL", "protocol-probe-fixtures", "protocol/authentication result fixtures failed")
+    enrollment_match = re.search(r"if \(-not \$sshKeyAuthentication\) \{(?P<body>.*?)\n\}\nWrite-Result 'PASS' 'ssh-key-auth'", runner, re.DOTALL)
+    enrollment_body = enrollment_match.group("body") if enrollment_match else ""
+    if enrollment_match and enrollment_body.count("Test-SshKeyAuthentication") == 1 and "$sshKeyAuthentication = $true" in enrollment_body:
+        report("PASS", "auth-probe-reuse", "initial auth result is reused; enrollment performs exactly one post-install verification")
+    else:
+        report("FAIL", "auth-probe-reuse", "runner repeats authentication after a successful probe")
     if all(token in runner for token in ("function Assert-LinuxPayloadLf", "function ConvertTo-LinuxLf", "$wrapper = ConvertTo-LinuxLf", "$bootstrapContent = ConvertTo-LinuxLf", "$installCommand = ConvertTo-LinuxLf", "powerseven-install-transaction.sh", "bash -n \"$0\"", "$transactionPath", "$remoteTransactionCommand")):
         report("PASS", "linux-payload-eol", "runner stages, normalizes and validates Linux payloads as LF")
     else:

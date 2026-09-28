@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=0
-readonly POWERSEVEN_BOOTSTRAP_VERSION='6'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='7'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -40,6 +40,7 @@ Usage: bootstrap.sh --check|--apply [--checkpoint N]
 Metadata:
   --version       print the bootstrap contract version
   --capabilities  print supported checkpoints
+  --protocol      print version and capabilities for the runner
 
 Implemented checkpoints:
   1  detect and expand the mounted root LVM using VG space already available
@@ -56,6 +57,10 @@ if [[ "$#" -eq 1 && "$1" == '--version' ]]; then
 fi
 if [[ "$#" -eq 1 && "$1" == '--capabilities' ]]; then
     printf 'checkpoints=%s\n' "$POWERSEVEN_BOOTSTRAP_CAPABILITIES"
+    exit 0
+fi
+if [[ "$#" -eq 1 && "$1" == '--protocol' ]]; then
+    printf 'powerseven-bootstrap %s\ncheckpoints=%s\n' "$POWERSEVEN_BOOTSTRAP_VERSION" "$POWERSEVEN_BOOTSTRAP_CAPABILITIES"
     exit 0
 fi
 
