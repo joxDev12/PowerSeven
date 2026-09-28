@@ -354,36 +354,58 @@ get_interface_mac() {
     ip -o link show dev "$1" | awk -F'link/ether ' 'NF > 1 { print $2; exit }' | awk '{ print $1 }'
 }
 
+get_interface_ipv4() {
+    ip -o -4 addr show dev "$1" scope global | awk 'NF { print $4; exit }'
+}
+
+get_interface_link_state() {
+    local operstate carrier
+    operstate=$(cat "/sys/class/net/$1/operstate" 2>/dev/null || printf 'unknown')
+    carrier=$(cat "/sys/class/net/$1/carrier" 2>/dev/null || printf 'unknown')
+    case "$carrier" in
+        1) carrier='up' ;;
+        0) carrier='down' ;;
+    esac
+    printf 'state=%s carrier=%s' "$operstate" "$carrier"
+}
+
 detect_network_interfaces() {
-    local name cidr address prefix
-    local -a underlay_candidates=() bridged_candidates=()
-    declare -A seen=()
+    local name address interface_type
+    local -a ethernet_candidates=() underlay_candidates=() bridged_candidates=()
 
     VMNET8_IF=''
     VMNET8_ADDRESS=''
     BRIDGED_IF=''
-    BRIDGED_ADDRESS=''
+    BRIDGED_ADDRESS='none'
 
-    while read -r _ name _ cidr _; do
+    while read -r _ name _; do
         name=${name%:}
-        address=${cidr%/*}
-        prefix=${cidr#*/}
-        [[ -n "$name" && -n "$address" && "$prefix" =~ ^[0-9]+$ ]] || continue
+        name=${name%%@*}
+        [[ -n "$name" && -r "/sys/class/net/$name/type" ]] || continue
         case "$name" in
             lo|docker*|br*|veth*|virbr*|wg*|tun*) continue ;;
         esac
-        [[ -n "${seen[$name]:-}" ]] && continue
-        seen[$name]=1
-        if [[ "$address" =~ ^192\.168\.214\.[0-9]+$ && "$prefix" == '24' ]]; then
-            underlay_candidates+=("$name|$cidr")
-        else
-            bridged_candidates+=("$name|$cidr")
-        fi
-    done < <(ip -o -4 addr show scope global)
+        interface_type=$(cat "/sys/class/net/$name/type" 2>/dev/null || true)
+        [[ "$interface_type" == '1' ]] || continue
+        [[ -n "$(get_interface_mac "$name")" ]] || continue
+        ethernet_candidates+=("$name")
+    done < <(ip -o link show)
+
+    for name in "${ethernet_candidates[@]}"; do
+        address=$(ip -o -4 addr show dev "$name" scope global | awk '$4 ~ /^192\.168\.214\.[0-9]+\/24$/ { print $4; exit }')
+        [[ -n "$address" ]] && underlay_candidates+=("$name|$address")
+    done
 
     if [[ "${#underlay_candidates[@]}" -eq 1 ]]; then
         IFS='|' read -r VMNET8_IF VMNET8_ADDRESS <<< "${underlay_candidates[0]}"
     fi
+
+    for name in "${ethernet_candidates[@]}"; do
+        [[ "$name" == "$VMNET8_IF" ]] && continue
+        address=$(get_interface_ipv4 "$name")
+        bridged_candidates+=("$name|${address:-none}")
+    done
+
     if [[ "${#bridged_candidates[@]}" -eq 1 ]]; then
         IFS='|' read -r BRIDGED_IF BRIDGED_ADDRESS <<< "${bridged_candidates[0]}"
     fi
@@ -393,8 +415,8 @@ detect_network_interfaces() {
 
 report_network_state() {
     local default_routes bridge_defaults dns_status
-    report PASS network-underlay "$VMNET8_IF address=$VMNET8_ADDRESS mac=$(get_interface_mac "$VMNET8_IF")"
-    report PASS network-bridged "$BRIDGED_IF address=$BRIDGED_ADDRESS mac=$(get_interface_mac "$BRIDGED_IF")"
+    report PASS network-underlay "interface=$VMNET8_IF address=$VMNET8_ADDRESS mac=$(get_interface_mac "$VMNET8_IF") $(get_interface_link_state "$VMNET8_IF")"
+    report PASS network-bridged "interface=$BRIDGED_IF address=$BRIDGED_ADDRESS mac=$(get_interface_mac "$BRIDGED_IF") $(get_interface_link_state "$BRIDGED_IF")"
     default_routes=$(ip -4 route show default)
     if [[ "$(printf '%s\n' "$default_routes" | awk 'NF { count++ } END { print count + 0 }')" -eq 1 ]] &&
        grep -Fq "default via $UNDERLAY_GATEWAY dev $VMNET8_IF" <<< "$default_routes"; then
@@ -555,7 +577,7 @@ network_checkpoint() {
     fi
     if [[ "$MODE" == 'check' ]]; then
         if ! detect_network_interfaces; then
-            report SKIP network 'expected one VMnet8 and one bridged interface with IPv4 addresses'
+            report SKIP network 'expected exactly one VMnet8 Ethernet interface and one other Ethernet candidate; bridged IPv4 may be none before apply'
             return 0
         fi
         report_network_state || true
@@ -570,7 +592,7 @@ network_checkpoint() {
         return 0
     fi
     if ! detect_network_interfaces; then
-        report FAIL network 'could not identify exactly one VMnet8 NIC and one non-overlapping bridged NIC'
+        report FAIL network 'could not identify exactly one VMnet8 Ethernet NIC and one unique bridged Ethernet NIC'
         return 1
     fi
     backup_netplan

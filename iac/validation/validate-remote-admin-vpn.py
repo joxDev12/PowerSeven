@@ -23,6 +23,14 @@ def report(level: str, label: str, detail: str) -> None:
         FAIL += 1
 
 
+def network_fixture_is_unambiguous(addresses: dict[str, str | None]) -> bool:
+    underlay = [name for name, address in addresses.items() if address and re.fullmatch(r"192\.168\.214\.[0-9]+/24", address)]
+    if len(underlay) != 1:
+        return False
+    bridged = [name for name in addresses if name != underlay[0]]
+    return len(bridged) == 1
+
+
 def load(relative: str):
     with (ROOT / relative).open(encoding="utf-8") as stream:
         return yaml.safe_load(stream)
@@ -69,6 +77,29 @@ def main() -> int:
         report("PASS", "linux-bootstrap", "CP2/CP3 and rollback/client paths exist")
     else:
         report("FAIL", "linux-bootstrap", "CP2/CP3 implementation markers are incomplete")
+    network_match = re.search(r"detect_network_interfaces\(\) \{(?P<body>.*?)(?=\n\}\n\nreport_network_state\(\))", bootstrap, re.DOTALL)
+    network_body = network_match.group("body") if network_match else ""
+    if network_match and all(token in network_body for token in ("ip -o link show", "/sys/class/net/", "get_interface_ipv4", "${address:-none}", "${#underlay_candidates[@]}", "${#bridged_candidates[@]}")) and "done < <(ip -o -4 addr show scope global)" not in network_body:
+        report("PASS", "network-detection", "CP2 enumerates Ethernet NICs without requiring bridged IPv4 and rejects ambiguity")
+    else:
+        report("FAIL", "network-detection", "CP2 still requires bridged IPv4 or lacks unique NIC safeguards")
+    if network_match and all(token not in network_body for token in ("netplan apply", "write_netplan_config", "backup_netplan", "ip addr add", "ip link set")):
+        report("PASS", "network-detection-readonly", "NIC discovery itself performs no network mutation")
+    else:
+        report("FAIL", "network-detection-readonly", "NIC discovery contains network mutation")
+    fixtures = (
+        ({"ens32": "192.168.214.145/24", "ens34": None}, True),
+        ({"ens32": "192.168.214.145/24", "ens34": None, "eth0": None}, False),
+        ({"ens32": "192.168.214.145/24"}, False),
+    )
+    if all(network_fixture_is_unambiguous(addresses) is expected for addresses, expected in fixtures):
+        report("PASS", "network-detection-fixtures", "underlay+bridged-without-IPv4 passes; missing or ambiguous bridged NICs fail")
+    else:
+        report("FAIL", "network-detection-fixtures", "NIC ambiguity fixture coverage failed")
+    if all(token in bootstrap for token in ("match: {macaddress:", "dhcp4: true", "use-routes: false", "use-dns: false", "schedule_network_rollback", "rollback_network_now")):
+        report("PASS", "network-safety", "CP2 retains MAC-based Netplan, DHCP isolation and rollback guard")
+    else:
+        report("FAIL", "network-safety", "CP2 network safety controls are incomplete")
     if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
