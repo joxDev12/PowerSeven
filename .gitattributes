@@ -1,0 +1,11 @@
+# Keep repository objects normalized and make checkout EOL explicit per host.
+* text=auto
+
+# Linux-executed files must never receive CRLF on Windows checkouts.
+*.sh text eol=lf
+iac/linux/** text eol=lf
+
+# Windows-native scripts and provisioning inputs use CRLF on Windows.
+*.ps1 text eol=crlf
+*.psd1 text eol=crlf
+iac/windows/autounattend.xml text eol=crlf
