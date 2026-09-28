@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=0
-readonly POWERSEVEN_BOOTSTRAP_VERSION='3'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='4'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -29,6 +29,8 @@ readonly WG_CLIENT_STATE='/var/lib/powerseven/admin-vpn/clients/powerseven-admin
 readonly WG_CLIENT_EXPORT='/tmp/powerseven-admin-laptop.conf'
 readonly NETWORK_STATE_DIR='/var/lib/powerseven/network'
 readonly NETWORK_PENDING_DIR='/run/powerseven'
+readonly NETWORK_READY_TIMEOUT_SECONDS=45
+readonly NETWORK_READY_INTERVAL_SECONDS=2
 
 usage() {
     cat <<'EOF'
@@ -444,12 +446,64 @@ report_network_state() {
 }
 
 verify_network_state() {
-    local underlay_address bridge_address bridge_prefix
-    underlay_address=$(ip -o -4 addr show dev "$VMNET8_IF" scope global | awk '$4 == "192.168.214.14/24" { print $4; exit }')
-    bridge_address=$(ip -o -4 addr show dev "$BRIDGED_IF" scope global | awk '{ print $4; exit }')
-    bridge_prefix=${bridge_address#*/}
-    [[ "$underlay_address" == "$UNDERLAY_ADDRESS" && -n "$bridge_address" && "$bridge_prefix" =~ ^[0-9]+$ ]] || return 1
+    local missing
+    missing=$(network_state_missing)
+    [[ -z "$missing" ]] || return 1
     report_network_state
+}
+
+network_state_missing() {
+    local missing='' underlay_address bridge_address bridge_prefix default_routes dns_status bridged_dns
+    local operstate carrier
+    underlay_address=$(ip -o -4 addr show dev "$VMNET8_IF" scope global | awk '$4 == "192.168.214.14/24" { print $4; exit }')
+    [[ "$underlay_address" == "$UNDERLAY_ADDRESS" ]] || missing+='underlay static pending; '
+
+    default_routes=$(ip -4 route show default 2>/dev/null || true)
+    if [[ "$(printf '%s\n' "$default_routes" | awk 'NF { count++ } END { print count + 0 }')" -ne 1 ]] ||
+       ! grep -Fq "default via $UNDERLAY_GATEWAY dev $VMNET8_IF" <<< "$default_routes"; then
+        missing+='default route pending; '
+    fi
+
+    operstate=$(cat "/sys/class/net/$BRIDGED_IF/operstate" 2>/dev/null || printf 'unknown')
+    carrier=$(cat "/sys/class/net/$BRIDGED_IF/carrier" 2>/dev/null || printf 'unknown')
+    [[ "$operstate" == 'up' && "$carrier" == '1' ]] || missing+='bridged link/carrier pending; '
+
+    bridge_address=$(ip -o -4 addr show dev "$BRIDGED_IF" scope global | awk 'NF { print $4; exit }')
+    bridge_prefix=${bridge_address#*/}
+    [[ -n "$bridge_address" && "$bridge_prefix" =~ ^[0-9]+$ ]] || missing+='bridged DHCP pending; '
+
+    if ip -4 route show default dev "$BRIDGED_IF" | grep -q .; then
+        missing+='bridged default route present; '
+    fi
+
+    if command -v resolvectl >/dev/null 2>&1; then
+        dns_status=$(resolvectl dns "$VMNET8_IF" 2>/dev/null || true)
+        grep -Fq "$UNDERLAY_DNS" <<< "$dns_status" || missing+='underlay DNS pending; '
+        bridged_dns=$(resolvectl dns "$BRIDGED_IF" 2>/dev/null || true)
+        if grep -Eq 'DNS Servers:|DNS Domain:' <<< "$bridged_dns"; then
+            missing+='bridged DNS present; '
+        fi
+    else
+        missing+='underlay DNS pending; '
+    fi
+    printf '%s' "${missing%; }"
+}
+
+wait_for_network_state() {
+    local elapsed=0 missing
+    while (( elapsed <= NETWORK_READY_TIMEOUT_SECONDS )); do
+        missing=$(network_state_missing)
+        if [[ -z "$missing" ]] && verify_network_state; then
+            return 0
+        fi
+        report INFO network "post-apply validation pending (${elapsed}s/${NETWORK_READY_TIMEOUT_SECONDS}s): $missing"
+        (( elapsed >= NETWORK_READY_TIMEOUT_SECONDS )) && break
+        sleep "$NETWORK_READY_INTERVAL_SECONDS"
+        elapsed=$((elapsed + NETWORK_READY_INTERVAL_SECONDS))
+    done
+    missing=$(network_state_missing)
+    report WARN network "post-apply validation timed out after ${NETWORK_READY_TIMEOUT_SECONDS}s: ${missing:-unknown state}"
+    return 1
 }
 
 write_netplan_config() {
@@ -603,7 +657,7 @@ network_checkpoint() {
         rollback_network_now "$NETWORK_TRANSACTION_ID"
         return 1
     fi
-    if ! detect_network_interfaces || ! verify_network_state; then
+    if ! detect_network_interfaces || ! wait_for_network_state; then
         report FAIL network 'post-apply validation failed; restoring the previous configuration'
         rollback_network_now "$NETWORK_TRANSACTION_ID"
         return 1

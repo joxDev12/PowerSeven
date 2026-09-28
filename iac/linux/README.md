@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `3`; ogni modifica
+- il contratto corrente del bootstrap è la versione `4`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - il checkpoint 2 configurerà le due NIC: VMnet8 statico `.14` con gateway

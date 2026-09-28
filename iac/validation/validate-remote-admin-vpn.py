@@ -31,6 +31,14 @@ def network_fixture_is_unambiguous(addresses: dict[str, str | None]) -> bool:
     return len(bridged) == 1
 
 
+def network_ready_fixture(state: dict[str, bool]) -> bool:
+    return all(state[key] for key in ("underlay", "default_route", "bridge_link", "bridge_ipv4", "underlay_dns")) and not state["bridge_default_route"] and not state["bridge_dns"]
+
+
+def network_retry_fixture(states: list[dict[str, bool]], timeout: int = 45, interval: int = 2) -> bool:
+    return any(network_ready_fixture(state) for state in states[: timeout // interval + 1])
+
+
 def load(relative: str):
     with (ROOT / relative).open(encoding="utf-8") as stream:
         return yaml.safe_load(stream)
@@ -100,6 +108,23 @@ def main() -> int:
         report("PASS", "network-safety", "CP2 retains MAC-based Netplan, DHCP isolation and rollback guard")
     else:
         report("FAIL", "network-safety", "CP2 network safety controls are incomplete")
+    if all(token in bootstrap for token in ("NETWORK_READY_TIMEOUT_SECONDS=45", "NETWORK_READY_INTERVAL_SECONDS=2", "network_state_missing", "wait_for_network_state", "sleep \"$NETWORK_READY_INTERVAL_SECONDS\"", "post-apply validation timed out", "bridged DHCP pending", "bridged default route present", "bridged DNS present")) and "while true" not in bootstrap:
+        report("PASS", "network-retry", "post-apply DHCP validation is bounded and rolls back on timeout")
+    else:
+        report("FAIL", "network-retry", "post-apply network retry/timeout guard is incomplete")
+    ready = {"underlay": True, "default_route": True, "bridge_link": True, "bridge_ipv4": True, "underlay_dns": True, "bridge_default_route": False, "bridge_dns": False}
+    pending = dict(ready, bridge_ipv4=False)
+    route_error = dict(ready, bridge_default_route=True)
+    dns_error = dict(ready, bridge_dns=True)
+    underlay_pending = dict(ready, underlay=False)
+    if (network_retry_fixture([pending, pending, ready]) and
+            not network_retry_fixture([pending] * 30) and
+            not network_ready_fixture(route_error) and
+            not network_ready_fixture(dns_error) and
+            not network_ready_fixture(underlay_pending)):
+        report("PASS", "network-retry-fixtures", "delayed DHCP passes within timeout; timeout, route, DNS and underlay failures do not")
+    else:
+        report("FAIL", "network-retry-fixtures", "bounded network retry fixture coverage failed")
     if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
@@ -108,11 +133,11 @@ def main() -> int:
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
-    if all(token in bootstrap for token in ("POWERSEVEN_BOOTSTRAP_VERSION", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='4'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
         report("PASS", "bootstrap-protocol", "version and checkpoint capabilities are explicitly exposed")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '3'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '4'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
