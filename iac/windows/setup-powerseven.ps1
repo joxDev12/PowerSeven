@@ -892,6 +892,7 @@ wrapper='/usr/local/sbin/powerseven-bootstrap'
 sudoers='/etc/sudoers.d/powerseven-bootstrap'
 
 # Authentication and the complete privileged transaction stay in this one SSH session.
+bash -n "$0"
 if ! sudo -v; then
     echo 'sudo credential validation failed; no PowerSeven files were installed' >&2
     exit 1
@@ -963,8 +964,13 @@ sudo rm -rf "$backup" "$stage"
 '@
         $installCommand = $installCommand.Replace('__STAGE__', $remoteStageDir).Replace('__BACKUP__', $remoteBackupDir)
         $installCommand = ConvertTo-LinuxLf -Name 'privileged bootstrap transaction' -Content $installCommand
+        $transactionPath = Join-Path $temporaryFiles[0] 'powerseven-install-transaction.sh'
+        [System.IO.File]::WriteAllText($transactionPath, $installCommand, [System.Text.UTF8Encoding]::new($false))
+        Assert-LinuxPayloadLf -Name 'staged privileged bootstrap transaction' -Content ([System.IO.File]::ReadAllText($transactionPath))
+        Invoke-Native $script:Scp ($keyOnlySshOptions + @($transactionPath, ($target + ':' + $remoteStageDir + '/powerseven-install-transaction.sh')))
+        $remoteTransactionCommand = ConvertTo-LinuxLf -Name 'privileged bootstrap transaction launcher' -Content ('bash "{0}/powerseven-install-transaction.sh"' -f $remoteStageDir)
         try {
-            Invoke-NativeInteractive $script:Ssh @('-tt', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath, $target, $installCommand)
+            Invoke-NativeInteractive $script:Ssh @('-tt', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath, $target, $remoteTransactionCommand)
         }
         catch {
             throw ('privileged bootstrap transaction failed; staged files were cleaned and prior installation was restored when necessary: {0}' -f $_.Exception.Message)
