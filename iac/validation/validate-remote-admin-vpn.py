@@ -85,6 +85,16 @@ def main() -> int:
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
+    protocol_match = re.search(r"function Test-BootstrapProtocol\b(?P<body>.*?)(?=\nfunction Test-ExistingBootstrapInstallation\b)", runner, re.DOTALL)
+    protocol_body = protocol_match.group("body") if protocol_match else ""
+    if protocol_match and all(token in protocol_body for token in ("Invoke-NativeCapture", "'test', '-x'", "'test', '-f'", "'--version'", "'--capabilities'", "StandardOutput", "capabilityMatch")) and "sh -c" not in protocol_body:
+        report("PASS", "bootstrap-protocol-probe", "protocol uses separate read-only probes and parses capabilities locally")
+    else:
+        report("FAIL", "bootstrap-protocol-probe", "protocol probe still relies on a fragile shell expression or lacks local parsing")
+    if protocol_match and all(token in protocol_body for token in ("BatchMode=yes", "PasswordAuthentication=no", "IdentitiesOnly=yes", "sudo', '-n'")) and not any(token in protocol_body for token in ("Invoke-NativeInteractive", "Invoke-Native $script:Scp", "install ',", "rm ',")):
+        report("PASS", "bootstrap-protocol-readonly", "protocol detection is key-only and read-only")
+    else:
+        report("FAIL", "bootstrap-protocol-readonly", "protocol detection can prompt or mutate the remote host")
     if all(token in runner for token in ("function Assert-LinuxPayloadLf", "function ConvertTo-LinuxLf", "$wrapper = ConvertTo-LinuxLf", "$bootstrapContent = ConvertTo-LinuxLf", "$installCommand = ConvertTo-LinuxLf", "powerseven-install-transaction.sh", "bash -n \"$0\"", "$transactionPath", "$remoteTransactionCommand")):
         report("PASS", "linux-payload-eol", "runner stages, normalizes and validates Linux payloads as LF")
     else:

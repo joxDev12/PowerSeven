@@ -269,6 +269,43 @@ function Test-NativeSuccess {
     }
 }
 
+function Invoke-NativeCapture {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = (($ArgumentList | ForEach-Object {
+        ConvertTo-WindowsProcessArgument -Value $_
+    }) -join ' ')
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start native command: $FilePath"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            StandardOutput = [string]$stdoutTask.Result
+            StandardError = [string]$stderrTask.Result
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 function Invoke-NativeReadOnly {
     param(
         [string]$FilePath,
@@ -368,17 +405,37 @@ function Test-BootstrapProtocol {
         [string]$RequiredCheckpoint
     )
 
-    $probe = 'sh -c ''set -eu; test -x /usr/local/sbin/powerseven-bootstrap; test -f /usr/local/lib/powerseven/bootstrap.sh; test "$(sudo -n /usr/local/sbin/powerseven-bootstrap --version)" = "__VERSION__"; capabilities="$(sudo -n /usr/local/sbin/powerseven-bootstrap --capabilities)"; test "$capabilities" = "__CAPABILITIES__"; case ",$capabilities," in *,__CHECKPOINT__,*) ;; *) exit 1 ;; esac'''
-    $probe = $probe.Replace('__VERSION__', $RequiredVersion).Replace('__CAPABILITIES__', $RequiredCapabilities).Replace('__CHECKPOINT__', $RequiredCheckpoint)
-    $probe = ConvertTo-LinuxLf -Name 'bootstrap protocol probe' -Content $probe
-    return Test-NativeSuccess $SshPath @(
+    $sshOptions = @(
         '-o', 'BatchMode=yes',
         '-o', 'PasswordAuthentication=no',
         '-o', 'IdentitiesOnly=yes',
-        '-i', $KeyPath,
-        $Target,
-        $probe
+        '-i', $KeyPath
     )
+
+    if (-not (Test-NativeSuccess $SshPath ($sshOptions + @($Target, 'test', '-x', '/usr/local/sbin/powerseven-bootstrap')))) {
+        return $false
+    }
+    if (-not (Test-NativeSuccess $SshPath ($sshOptions + @($Target, 'test', '-f', '/usr/local/lib/powerseven/bootstrap.sh')))) {
+        return $false
+    }
+
+    $versionResult = Invoke-NativeCapture $SshPath ($sshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--version'))
+    if ($versionResult.ExitCode -ne 0 -or ([string]$versionResult.StandardOutput).Trim() -cne ('powerseven-bootstrap {0}' -f $RequiredVersion)) {
+        return $false
+    }
+
+    $capabilitiesResult = Invoke-NativeCapture $SshPath ($sshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--capabilities'))
+    $capabilities = ([string]$capabilitiesResult.StandardOutput).Trim()
+    if ($capabilitiesResult.ExitCode -ne 0 -or $capabilities -cne $RequiredCapabilities) {
+        return $false
+    }
+
+    $capabilityMatch = [regex]::Match($capabilities, '^checkpoints=(?<values>[1-9][0-9]*(?:,[1-9][0-9]*)*)$')
+    if (-not $capabilityMatch.Success -or
+        (($capabilityMatch.Groups['values'].Value -split ',') -notcontains $RequiredCheckpoint)) {
+        return $false
+    }
+    return $true
 }
 
 function Test-ExistingBootstrapInstallation {
