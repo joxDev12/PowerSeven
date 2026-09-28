@@ -85,6 +85,10 @@ def main() -> int:
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
+    if all(token in runner for token in ("function Assert-LinuxPayloadLf", "function ConvertTo-LinuxLf", "$wrapper = ConvertTo-LinuxLf", "$bootstrapContent = ConvertTo-LinuxLf", "$installCommand = ConvertTo-LinuxLf")):
+        report("PASS", "linux-payload-eol", "runner normalizes and validates Linux payloads as LF")
+    else:
+        report("FAIL", "linux-payload-eol", "Linux payload EOL normalization is incomplete")
     if "Jarvis" not in bootstrap and "Fedora" not in bootstrap and not re.search(r"wireguard\.exe|wg-quick|\bwg\.exe\b|install-wireguard", runner, re.IGNORECASE):
         report("PASS", "vpn-ownership", "VPN orchestration remains in PowerSeven; runner does not configure WireGuard")
     else:

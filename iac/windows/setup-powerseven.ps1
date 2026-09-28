@@ -60,6 +60,29 @@ function Invoke-NativeInteractive {
     }
 }
 
+function Assert-LinuxPayloadLf {
+    param(
+        [string]$Name,
+        [AllowEmptyString()][AllowNull()][string]$Content
+    )
+
+    if ($null -ne $Content -and $Content.Contains("`r")) {
+        throw "Linux payload contains CR characters: $Name"
+    }
+}
+
+function ConvertTo-LinuxLf {
+    param(
+        [string]$Name,
+        [AllowEmptyString()][AllowNull()][string]$Content
+    )
+
+    if ($null -eq $Content) { return $null }
+    $normalized = $Content.Replace("`r`n", "`n").Replace("`r", '')
+    Assert-LinuxPayloadLf -Name $Name -Content $normalized
+    return $normalized
+}
+
 function ConvertTo-WindowsProcessArgument {
     param([AllowEmptyString()][string]$Value)
 
@@ -347,6 +370,7 @@ function Test-BootstrapProtocol {
 
     $probe = 'sh -c ''set -eu; test -x /usr/local/sbin/powerseven-bootstrap; test -f /usr/local/lib/powerseven/bootstrap.sh; test "$(sudo -n /usr/local/sbin/powerseven-bootstrap --version)" = "__VERSION__"; capabilities="$(sudo -n /usr/local/sbin/powerseven-bootstrap --capabilities)"; test "$capabilities" = "__CAPABILITIES__"; case ",$capabilities," in *,__CHECKPOINT__,*) ;; *) exit 1 ;; esac'''
     $probe = $probe.Replace('__VERSION__', $RequiredVersion).Replace('__CAPABILITIES__', $RequiredCapabilities).Replace('__CHECKPOINT__', $RequiredCheckpoint)
+    $probe = ConvertTo-LinuxLf -Name 'bootstrap protocol probe' -Content $probe
     return Test-NativeSuccess $SshPath @(
         '-o', 'BatchMode=yes',
         '-o', 'PasswordAuthentication=no',
@@ -465,6 +489,9 @@ exec /usr/local/lib/powerseven/bootstrap.sh "$@"
 '@
 
     $sudoers = "{0} ALL=(root) NOPASSWD: /usr/local/sbin/powerseven-bootstrap`n" -f $Username
+    $wrapper = ConvertTo-LinuxLf -Name 'bootstrap wrapper' -Content $wrapper
+    $sudoers = ConvertTo-LinuxLf -Name 'bootstrap sudoers' -Content $sudoers
+    $bootstrapContent = ConvertTo-LinuxLf -Name 'bootstrap script' -Content ([System.IO.File]::ReadAllText($BootstrapSource))
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('powerseven-bootstrap-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
@@ -473,7 +500,7 @@ exec /usr/local/lib/powerseven/bootstrap.sh "$@"
     $bootstrapCopyPath = Join-Path $tempRoot 'bootstrap.sh'
     [System.IO.File]::WriteAllText($wrapperPath, $wrapper, [System.Text.UTF8Encoding]::new($false))
     [System.IO.File]::WriteAllText($sudoersPath, $sudoers, [System.Text.UTF8Encoding]::new($false))
-    Copy-Item -LiteralPath $BootstrapSource -Destination $bootstrapCopyPath -Force
+    [System.IO.File]::WriteAllText($bootstrapCopyPath, $bootstrapContent, [System.Text.UTF8Encoding]::new($false))
 
     return @($tempRoot, $wrapperPath, $sudoersPath, $bootstrapCopyPath)
 }
@@ -734,6 +761,7 @@ chmod 600 "$auth"
 trap - EXIT
 '@
     $enrollCommand = $enrollCommand.Replace('__BACKUP__', $enrollmentBackupName).Replace('__MARKER__', $enrollmentMarkerName).Replace('__KEY__', $publicKey)
+    $enrollCommand = ConvertTo-LinuxLf -Name 'SSH enrollment command' -Content $enrollCommand
     try {
         Invoke-NativeInteractive $script:Ssh @(
             '-tt',
@@ -766,6 +794,7 @@ chmod 700 "$HOME/.ssh"
 if [ -f "$auth" ]; then chmod 600 "$auth"; fi
 '@
         $rollbackCommand = $rollbackCommand.Replace('__BACKUP__', $enrollmentBackupName).Replace('__MARKER__', $enrollmentMarkerName).Replace('__TOKEN__', $enrollmentToken).Replace('__KEY__', $publicKey)
+        $rollbackCommand = ConvertTo-LinuxLf -Name 'SSH enrollment rollback command' -Content $rollbackCommand
         try {
             Invoke-NativeInteractive $script:Ssh @(
                 '-tt',
@@ -782,6 +811,7 @@ if [ -f "$auth" ]; then chmod 600 "$auth"; fi
     }
 
     $cleanupEnrollmentCommand = 'rm -f "$HOME/.ssh/{0}" "$HOME/.ssh/{1}"' -f $enrollmentBackupName, $enrollmentMarkerName
+    $cleanupEnrollmentCommand = ConvertTo-LinuxLf -Name 'SSH enrollment cleanup command' -Content $cleanupEnrollmentCommand
     Invoke-Native $script:Ssh @(
         '-o', 'BatchMode=yes',
         '-o', 'PasswordAuthentication=no',
@@ -842,6 +872,7 @@ try {
         $remoteStageDir = '/tmp/powerseven-stage-' + $installToken
         $remoteBackupDir = '/tmp/powerseven-backup-' + $installToken
         $stageCommand = 'umask 077; mkdir -p "{0}"; chmod 700 "{0}"' -f $remoteStageDir
+        $stageCommand = ConvertTo-LinuxLf -Name 'bootstrap staging command' -Content $stageCommand
         Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $stageCommand))
 
         $temporaryFiles = New-RemoteBootstrapFiles -Username $UbuntuUsername -BootstrapSource $bootstrapSource
@@ -931,6 +962,7 @@ trap - ERR
 sudo rm -rf "$backup" "$stage"
 '@
         $installCommand = $installCommand.Replace('__STAGE__', $remoteStageDir).Replace('__BACKUP__', $remoteBackupDir)
+        $installCommand = ConvertTo-LinuxLf -Name 'privileged bootstrap transaction' -Content $installCommand
         try {
             Invoke-NativeInteractive $script:Ssh @('-tt', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath, $target, $installCommand)
         }
@@ -1042,7 +1074,8 @@ finally {
     }
     if (-not [string]::IsNullOrWhiteSpace($remoteStageDir)) {
         try {
-            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, ('rm -rf "{0}"' -f $remoteStageDir)))
+            $remoteStageCleanup = ConvertTo-LinuxLf -Name 'bootstrap staging cleanup command' -Content ('rm -rf "{0}"' -f $remoteStageDir)
+            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $remoteStageCleanup))
         }
         catch {
             Write-Result 'WARN' 'cleanup' 'remote staging cleanup could not be confirmed'
