@@ -112,7 +112,7 @@ def main() -> int:
         report("PASS", "bootstrap-protocol", "version and checkpoint capabilities are explicitly exposed")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '2'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '3'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
