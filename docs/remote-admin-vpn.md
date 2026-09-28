@@ -38,6 +38,9 @@ ripristina automaticamente la configurazione se il runner non conferma dopo
 la riconnessione a `.14`.
 La conferma attende fino a 45 s che DHCP Bridged, DNS, route, networkd e
 Netplan persistente siano pronti: SSH su `.14` non basta per il commit.
+CP2 verifica i `.network` generati per i MAC delle due NIC, ricarica e
+riconfigura systemd-networkd e prova un singolo restart protetto se restano
+unmanaged. Anche il rollback riapplica Netplan e ricarica networkd.
 
 CP3 installa `wg-admin`, chiavi server persistenti, forwarding IPv4 e una
 tabella nftables dedicata. Dalla Bridged è permesso solo UDP/51820 e traffico

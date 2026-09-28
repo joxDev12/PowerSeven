@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
-readonly POWERSEVEN_BOOTSTRAP_VERSION='8'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='9'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -30,6 +30,7 @@ readonly NETWORK_LOCK_FILE='/run/powerseven/network.lock'
 readonly NETWORK_READY_TIMEOUT_SECONDS=45
 readonly NETWORK_READY_INTERVAL_SECONDS=2
 readonly NETWORK_ROLLBACK_TIMEOUT_SECONDS=180
+readonly NETWORKD_TAKEOVER_TIMEOUT_SECONDS=6
 
 usage() {
     cat <<'EOF'
@@ -390,6 +391,109 @@ get_interface_link_state() {
     printf 'state=%s carrier=%s' "$operstate" "$carrier"
 }
 
+report_networkd_diagnostics() {
+    local interface expected_mac actual_mac generated_file service_state
+    service_state=$(systemctl is-active systemd-networkd.service 2>/dev/null || true)
+    report WARN networkd-diagnostic "systemd-networkd=$service_state generated=/run/systemd/network"
+    systemctl status --no-pager --full systemd-networkd.service 2>&1 | sed -n '1,12p' | while IFS= read -r line; do
+        report INFO networkd-service-status "$line"
+    done || true
+    for interface in "$VMNET8_IF" "$BRIDGED_IF"; do
+        [[ -n "$interface" ]] || continue
+        expected_mac=$(get_interface_mac "$interface" 2>/dev/null || true)
+        actual_mac=$(cat "/sys/class/net/$interface/address" 2>/dev/null || true)
+        generated_file=$(networkd_file_for_mac "$expected_mac" 2>/dev/null || true)
+        report WARN networkd-diagnostic "interface=$interface expected_mac=$expected_mac actual_mac=$actual_mac generated_file=${generated_file:-none}"
+        networkctl status --no-pager "$interface" 2>&1 | sed -n '1,12p' | while IFS= read -r line; do
+            report INFO networkd-status "$line"
+        done || true
+    done
+    find /run/systemd/network -maxdepth 1 -type f -name '*.network' -printf '%f\n' 2>/dev/null |
+        while IFS= read -r file; do report INFO networkd-generated-file "$file"; done || true
+}
+
+networkd_interfaces_are_managed() {
+    networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 &&
+        networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1
+}
+
+wait_for_networkd_managed() {
+    local timeout="$1" elapsed=0
+    while (( elapsed < timeout )); do
+        networkd_interfaces_are_managed && return 0
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    networkd_interfaces_are_managed
+}
+
+wait_for_interface_managed() {
+    local interface="$1" timeout="$2" elapsed=0
+    while (( elapsed < timeout )); do
+        networkctl is-managed "$interface" >/dev/null 2>&1 && return 0
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    networkctl is-managed "$interface" >/dev/null 2>&1
+}
+
+ensure_networkd_takeover() {
+    local reload_failed=0 phase_timeout=$((NETWORKD_TAKEOVER_TIMEOUT_SECONDS / 2))
+    (( phase_timeout > 0 )) || phase_timeout=1
+    if ! netplan_generated_networkd_is_valid; then
+        report WARN networkd-takeover 'Netplan did not generate one MAC-matched .network file per NIC'
+        report_networkd_diagnostics
+        return 1
+    fi
+    if ! systemctl enable systemd-networkd.service ||
+       { ! systemctl is-active --quiet systemd-networkd.service && ! systemctl start systemd-networkd.service; }; then
+        report WARN networkd-takeover 'systemd-networkd could not be enabled or started'
+        report_networkd_diagnostics
+        return 1
+    fi
+    networkctl reload || reload_failed=1
+    networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" || reload_failed=1
+    if (( reload_failed == 0 )) && wait_for_networkd_managed "$phase_timeout"; then
+        report PASS networkd-takeover "reload/reconfigure manages $VMNET8_IF and $BRIDGED_IF"
+        return 0
+    fi
+    report WARN networkd-takeover 'reload/reconfigure did not take ownership; attempting one protected networkd restart'
+    if systemctl restart systemd-networkd.service; then
+        networkctl reload || true
+        networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" || true
+        if wait_for_networkd_managed "$phase_timeout"; then
+            report PASS networkd-takeover "restart/reconfigure manages $VMNET8_IF and $BRIDGED_IF"
+            return 0
+        fi
+    fi
+    report FAIL networkd-takeover 'systemd-networkd still does not manage both interfaces'
+    report_networkd_diagnostics
+    return 1
+}
+
+reload_networkd_after_netplan() {
+    local underlay_mac networkd_expected=0 phase_timeout=$((NETWORKD_TAKEOVER_TIMEOUT_SECONDS / 2))
+    (( phase_timeout > 0 )) || phase_timeout=1
+    underlay_mac=$(get_interface_mac "$VMNET8_IF" 2>/dev/null || true)
+    if [[ -n "$underlay_mac" ]] && networkd_file_for_mac "$underlay_mac" >/dev/null 2>&1; then
+        networkd_expected=1
+    fi
+    if (( networkd_expected )); then
+        systemctl enable systemd-networkd.service || return 1
+        systemctl is-active --quiet systemd-networkd.service || systemctl start systemd-networkd.service || return 1
+    elif ! systemctl is-active --quiet systemd-networkd.service; then
+        return 0
+    fi
+    if networkctl reload && networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" &&
+       { (( networkd_expected == 0 )) || wait_for_interface_managed "$VMNET8_IF" "$phase_timeout"; }; then
+        return 0
+    fi
+    systemctl restart systemd-networkd.service &&
+        networkctl reload &&
+        networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" &&
+        { (( networkd_expected == 0 )) || wait_for_interface_managed "$VMNET8_IF" "$phase_timeout"; }
+}
+
 acquire_network_lock() {
     install -d -m 0750 "$NETWORK_PENDING_DIR"
     exec 9>"$NETWORK_LOCK_FILE"
@@ -426,6 +530,38 @@ cancel_pending_network_transactions() {
     release_network_lock
 }
 
+networkd_file_for_mac() {
+    local mac="$1" file
+    local -a matches=()
+    for file in /run/systemd/network/*.network; do
+        [[ -f "$file" ]] || continue
+        if awk -v wanted="$mac" '
+            /^\[Match\]$/ { in_match=1; next }
+            /^\[/ { in_match=0 }
+            in_match && /^(MACAddress|PermanentMACAddress)=/ {
+                value=$0; sub(/^[^=]*=/, "", value)
+                count=split(value, addresses, /[,[:space:]]+/)
+                for (i=1; i<=count; i++) if (tolower(addresses[i]) == tolower(wanted)) found=1
+            }
+            END { exit !found }
+        ' "$file"; then
+            matches+=("$file")
+        fi
+    done
+    [[ "${#matches[@]}" -eq 1 ]] || return 1
+    printf '%s\n' "${matches[0]}"
+}
+
+netplan_generated_networkd_is_valid() {
+    local vmnet_mac bridged_mac
+    vmnet_mac=$(get_interface_mac "$VMNET8_IF")
+    bridged_mac=$(get_interface_mac "$BRIDGED_IF")
+    [[ "$vmnet_mac" =~ ^[0-9a-fA-F:]{17}$ && "$bridged_mac" =~ ^[0-9a-fA-F:]{17}$ ]] || return 1
+    VMNET8_NETWORKD_FILE=$(networkd_file_for_mac "$vmnet_mac") || return 1
+    BRIDGED_NETWORKD_FILE=$(networkd_file_for_mac "$bridged_mac") || return 1
+    [[ "$VMNET8_NETWORKD_FILE" != "$BRIDGED_NETWORKD_FILE" ]]
+}
+
 netplan_persistence_is_valid() {
     local file='/etc/netplan/99-powerseven.yaml' vmnet_mac bridged_mac metadata
     [[ -f "$file" ]] || return 1
@@ -451,15 +587,15 @@ netplan_persistence_is_valid() {
     netplan_block_contains powerseven-bridged 'dhcp4: true' || return 1
     netplan_block_contains powerseven-bridged 'use-routes: false' || return 1
     netplan_block_contains powerseven-bridged 'use-dns: false' || return 1
-    netplan generate >/dev/null 2>&1
+    netplan generate >/dev/null 2>&1 && netplan_generated_networkd_is_valid
 }
 
 validate_netplan_persistence() {
     if ! netplan_persistence_is_valid; then
-        report FAIL network-persistence '99-powerseven.yaml is missing, invalid, mismatched or netplan generate failed'
+        report FAIL network-persistence '99-powerseven.yaml or its generated MAC-matched networkd files are missing or invalid'
         return 1
     fi
-    report PASS network-persistence '99-powerseven.yaml is root:root 600, MAC-matched and netplan generate passed'
+    report PASS network-persistence "99-powerseven.yaml and generated networkd files are valid: $VMNET8_NETWORKD_FILE, $BRIDGED_NETWORKD_FILE"
 }
 
 detect_network_interfaces() {
@@ -576,6 +712,8 @@ network_state_missing() {
 
     networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 || missing+='underlay networkd unmanaged; '
     networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1 || missing+='bridged networkd unmanaged; '
+    systemctl is-active --quiet systemd-networkd.service || missing+='systemd-networkd inactive; '
+    systemctl is-enabled --quiet systemd-networkd.service || missing+='systemd-networkd disabled; '
 
     if command -v resolvectl >/dev/null 2>&1; then
         dns_status=$(resolvectl dns "$VMNET8_IF" 2>/dev/null || true)
@@ -592,19 +730,25 @@ network_state_missing() {
 }
 
 wait_for_network_state() {
-    local elapsed=0 missing
-    while (( elapsed <= NETWORK_READY_TIMEOUT_SECONDS )); do
+    local timeout="${1:-$NETWORK_READY_TIMEOUT_SECONDS}" deadline elapsed remaining missing last_missing='' sleep_for
+    deadline=$((SECONDS + timeout))
+    while (( SECONDS < deadline )); do
+        elapsed=$((timeout - (deadline - SECONDS)))
         missing=$(network_state_missing)
+        last_missing=$missing
         if [[ -z "$missing" ]] && verify_network_state; then
             return 0
         fi
-        report INFO network "post-apply validation pending (${elapsed}s/${NETWORK_READY_TIMEOUT_SECONDS}s): $missing"
-        (( elapsed >= NETWORK_READY_TIMEOUT_SECONDS )) && break
-        sleep "$NETWORK_READY_INTERVAL_SECONDS"
-        elapsed=$((elapsed + NETWORK_READY_INTERVAL_SECONDS))
+        report INFO network "post-apply validation pending (${elapsed}s/${timeout}s): $missing"
+        remaining=$((deadline - SECONDS))
+        (( remaining > 0 )) || break
+        sleep_for=$NETWORK_READY_INTERVAL_SECONDS
+        (( sleep_for > remaining )) && sleep_for=$remaining
+        (( sleep_for > 0 )) || break
+        sleep "$sleep_for"
     done
-    missing=$(network_state_missing)
-    report WARN network "post-apply validation timed out after ${NETWORK_READY_TIMEOUT_SECONDS}s: ${missing:-unknown state}"
+    report WARN network "post-apply validation timed out after ${timeout}s: ${last_missing:-unknown state}"
+    if [[ "$last_missing" == *'networkd'* ]]; then report_networkd_diagnostics; fi
     return 1
 }
 
@@ -685,6 +829,41 @@ shopt -u nullglob
 cp -a '$backup'/. /etc/netplan/
 netplan generate
 netplan apply
+underlay_iface='$VMNET8_IF'
+bridged_iface='$BRIDGED_IF'
+vmnet_mac=\$(cat "/sys/class/net/\$underlay_iface/address")
+networkd_expected=0
+for netfile in /run/systemd/network/*.network; do
+    [[ -f "\$netfile" ]] || continue
+    if awk -v wanted="\$vmnet_mac" '
+        /^\[Match\]$/ { in_match=1; next }
+        /^\[/ { in_match=0 }
+        in_match && /^(MACAddress|PermanentMACAddress)=/ {
+            value=\$0; sub(/^[^=]*=/, "", value)
+            count=split(value, addresses, /[,[:space:]]+/)
+            for (i=1; i<=count; i++) if (tolower(addresses[i]) == tolower(wanted)) found=1
+        }
+        END { exit !found }
+    ' "\$netfile"; then networkd_expected=1; break; fi
+done
+if (( networkd_expected )); then
+    systemctl enable systemd-networkd.service
+    systemctl is-active --quiet systemd-networkd.service || systemctl start systemd-networkd.service
+fi
+if systemctl is-active --quiet systemd-networkd.service; then
+    if ! networkctl reload || ! networkctl reconfigure "\$underlay_iface" "\$bridged_iface"; then
+        systemctl restart systemd-networkd.service
+        networkctl reload
+        networkctl reconfigure "\$underlay_iface" "\$bridged_iface"
+    fi
+    if (( networkd_expected )); then
+        for attempt in 1 2 3 4 5; do
+            networkctl is-managed "\$underlay_iface" >/dev/null 2>&1 && break
+            sleep 1
+        done
+        networkctl is-managed "\$underlay_iface"
+    fi
+fi
 rm -f '$running_marker' '$script' '$NETWORK_STATE_DIR/pending-token' '$NETWORK_STATE_DIR/pending-backup'
 rm -rf '$backup'
 EOF
@@ -717,9 +896,9 @@ rollback_network_now() {
     for file in /etc/netplan/*.yaml /etc/netplan/*.yml; do rm -f "$file"; done
     shopt -u nullglob
     cp -a "$backup"/. /etc/netplan/
-    if ! netplan generate || ! netplan apply; then
+    if ! netplan generate || ! netplan apply || ! reload_networkd_after_netplan; then
         release_network_lock
-        report FAIL network 'rollback could not restore and apply the previous Netplan configuration'
+        report FAIL network 'rollback could not restore Netplan and reload/reconfigure systemd-networkd'
         return 1
     fi
     rm -f "$running_marker" "$script" "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
@@ -764,7 +943,7 @@ commit_network_transaction() {
 }
 
 confirm_network() {
-    local pending
+    local pending confirm_started=$SECONDS elapsed remaining
     pending=$(cat "$NETWORK_STATE_DIR/pending-token" 2>/dev/null || true)
     [[ -n "$pending" && "$pending" == "$CONFIRM_NETWORK_TRANSACTION_ID" ]] || {
         report FAIL network-confirm 'network transaction token is missing or does not match'; return 1;
@@ -777,7 +956,17 @@ confirm_network() {
         report FAIL network-confirm 'stored network interfaces are missing or invalid; rollback guard remains active'
         return 1
     fi
-    if ! wait_for_network_state; then
+    if ! networkd_interfaces_are_managed ||
+       ! systemctl is-active --quiet systemd-networkd.service ||
+       ! systemctl is-enabled --quiet systemd-networkd.service; then
+        if ! ensure_networkd_takeover; then
+            report FAIL network-confirm 'networkd takeover failed; rollback guard remains active'
+            return 1
+        fi
+    fi
+    elapsed=$((SECONDS - confirm_started))
+    remaining=$((NETWORK_READY_TIMEOUT_SECONDS - elapsed))
+    if (( remaining <= 0 )) || ! wait_for_network_state "$remaining"; then
         report FAIL network-confirm 'network readiness timed out; rollback guard remains active'
         return 1
     fi
@@ -827,8 +1016,19 @@ network_checkpoint() {
     fi
     write_netplan_config || { report FAIL network 'could not write the staged Netplan configuration'; rollback_network_now "$NETWORK_TRANSACTION_ID"; return 1; }
     schedule_network_rollback || { report FAIL network 'could not schedule automatic Netplan rollback'; rollback_network_now "$NETWORK_TRANSACTION_ID"; return 1; }
-    if ! netplan generate || ! netplan apply; then
+    if ! netplan generate || ! netplan_generated_networkd_is_valid; then
+        report FAIL network 'Netplan did not generate valid MAC-matched networkd files; restoring the previous configuration'
+        report_networkd_diagnostics
+        rollback_network_now "$NETWORK_TRANSACTION_ID"
+        return 1
+    fi
+    if ! netplan apply; then
         report FAIL network 'Netplan apply failed; restoring the previous configuration'
+        rollback_network_now "$NETWORK_TRANSACTION_ID"
+        return 1
+    fi
+    if ! ensure_networkd_takeover; then
+        report FAIL network 'systemd-networkd takeover failed; restoring the previous configuration'
         rollback_network_now "$NETWORK_TRANSACTION_ID"
         return 1
     fi

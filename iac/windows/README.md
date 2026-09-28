@@ -86,9 +86,9 @@ VMnet8 statico `.14` e Bridged DHCP senza default route/DNS. Il passaggio `.145`
 → `.14` usa una sessione SSH con timeout bounded, attende il nuovo endpoint e
 riusa la host identity della sessione DHCP tramite `HostKeyAlias`; il token di
 rete viene confermato automaticamente. Il rollback guard resta attivo fino a
-quella conferma. In v8 la conferma attende fino a 45 s che DHCP Bridged,
+quella conferma. In v9 la conferma attende fino a 45 s che DHCP Bridged,
 networkd, route, DNS e Netplan persistente siano pronti; il runner concede
-60 s alla chiamata di conferma.
+75 s alla chiamata di conferma.
 CP3 configura `wg-admin` su VPS14, aggiunge su DC02 la route persistente
 `10.99.0.0/24 via 192.168.214.14`, limita RDP alla subnet VPN e salva il client
 config per `jarvis` (`10.99.0.2/32`) e `giorgio-laptop` (`10.99.0.3/32`)

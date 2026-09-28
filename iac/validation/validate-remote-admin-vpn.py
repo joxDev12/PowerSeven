@@ -39,6 +39,16 @@ def network_retry_fixture(states: list[dict[str, bool]], timeout: int = 45, inte
     return any(network_ready_fixture(state) for state in states[: timeout // interval + 1])
 
 
+def networkd_takeover_fixture(*, initially_managed: bool, reload_manages: bool, restart_manages: bool) -> tuple[bool, str]:
+    if initially_managed:
+        return True, "none"
+    if reload_manages:
+        return True, "reload"
+    if restart_manages:
+        return True, "restart"
+    return False, "rollback"
+
+
 def host_key_fixture(trusted: str, presented: str) -> bool:
     return trusted == presented
 
@@ -154,7 +164,7 @@ def main() -> int:
         report("PASS", "network-safety", "CP2 retains MAC-based Netplan, DHCP isolation and rollback guard")
     else:
         report("FAIL", "network-safety", "CP2 network safety controls are incomplete")
-    if all(token in bootstrap for token in ("NETWORK_READY_TIMEOUT_SECONDS=45", "NETWORK_READY_INTERVAL_SECONDS=2", "network_state_missing", "wait_for_network_state", "sleep \"$NETWORK_READY_INTERVAL_SECONDS\"", "post-apply validation timed out", "bridged DHCP pending", "bridged default route present", "bridged DNS present")) and "while true" not in bootstrap:
+    if all(token in bootstrap for token in ("NETWORK_READY_TIMEOUT_SECONDS=45", "NETWORK_READY_INTERVAL_SECONDS=2", "network_state_missing", "wait_for_network_state", "sleep \"$sleep_for\"", "post-apply validation timed out", "bridged DHCP pending", "bridged default route present", "bridged DNS present")) and "while true" not in bootstrap:
         report("PASS", "network-retry", "post-apply DHCP validation is bounded and rolls back on timeout")
     else:
         report("FAIL", "network-retry", "post-apply network retry/timeout guard is incomplete")
@@ -228,11 +238,44 @@ def main() -> int:
             confirm_body.find("wait_for_network_state") < confirm_body.find("commit_network_transaction") and
             "verify_network_state" not in confirm_body and
             "NETWORK_ROLLBACK_TIMEOUT_SECONDS=180" in bootstrap and
-            "-TimeoutSeconds 60" in runner and
+            "-TimeoutSeconds 75" in runner and
             "network transition SSH session" in runner):
         report("PASS", "network-confirm-fixtures", "delayed networkd/DHCP wait, timeout, persistence and rollback window are covered")
     else:
         report("FAIL", "network-confirm-fixtures", "confirmation can commit early or outlive its rollback guard")
+    takeover_cases = (
+        networkd_takeover_fixture(initially_managed=False, reload_manages=True, restart_manages=False),
+        networkd_takeover_fixture(initially_managed=False, reload_manages=False, restart_manages=True),
+        networkd_takeover_fixture(initially_managed=False, reload_manages=False, restart_manages=False),
+        networkd_takeover_fixture(initially_managed=True, reload_manages=False, restart_manages=False),
+    )
+    expected_takeover_cases = ((True, "reload"), (True, "restart"), (False, "rollback"), (True, "none"))
+    takeover_tokens = (
+        "networkd_file_for_mac()", "/run/systemd/network/*.network", "MACAddress|PermanentMACAddress",
+        "netplan_generated_networkd_is_valid", "systemctl enable systemd-networkd.service",
+    )
+    apply_order_match = re.search(r"network_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nensure_wireguard_server_keys\(\))", bootstrap, re.DOTALL)
+    apply_order_body = apply_order_match.group("body") if apply_order_match else ""
+    apply_stages = [apply_order_body.find(token) for token in (
+        "netplan generate", "netplan_generated_networkd_is_valid", "netplan apply", "ensure_networkd_takeover", "wait_for_network_state"
+    )]
+    rollback_match = re.search(r"rollback_network_now\(\) \{(?P<body>.*?)(?=\n\}\n\ncommit_network_transaction\(\))", bootstrap, re.DOTALL)
+    transient_rollback_match = re.search(r"schedule_network_rollback\(\) \{(?P<body>.*?)(?=\n\}\n\nrollback_network_now\(\))", bootstrap, re.DOTALL)
+    if (takeover_cases == expected_takeover_cases and all(token in bootstrap for token in takeover_tokens) and
+            apply_order_match and all(index >= 0 for index in apply_stages) and apply_stages == sorted(apply_stages) and
+            rollback_match and "reload_networkd_after_netplan" in rollback_match.group("body") and
+            transient_rollback_match and all(token in transient_rollback_match.group("body") for token in (
+                "networkctl reload", "networkctl reconfigure", "systemctl restart systemd-networkd.service")) and
+            "NETWORKD_TAKEOVER_TIMEOUT_SECONDS=6" in bootstrap):
+        report("PASS", "networkd-takeover-fixtures", "MAC-matched generated files, reload/reconfigure, bounded restart fallback and rollback reload are covered")
+    else:
+        report("FAIL", "networkd-takeover-fixtures", "networkd ownership takeover or rollback reload sequence is incomplete")
+    if (confirm_match and "confirm_started=$SECONDS" in confirm_body and
+            "remaining=$((NETWORK_READY_TIMEOUT_SECONDS - elapsed))" in confirm_body and
+            "-TimeoutSeconds 75" in runner):
+        report("PASS", "networkd-confirm-timeout", "Linux confirmation shares a bounded 45-second budget and Windows allows 75 seconds")
+    else:
+        report("FAIL", "networkd-confirm-timeout", "Linux/Windows confirmation timeout budgets are inconsistent")
     cp3_match = re.search(r"vpn_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nwhile \[\[ \$# -gt 0 \]\])", bootstrap, re.DOTALL)
     cp3_body = cp3_match.group("body") if cp3_match else ""
     if (cp3_match and
@@ -287,11 +330,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='8'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='9'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '8'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '9'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -316,10 +359,10 @@ def main() -> int:
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 8\ncheckpoints=1,2,3\n", "8", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "8", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "8", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "8", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 9\ncheckpoints=1,2,3\n", "9", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "9", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "9", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "9", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")

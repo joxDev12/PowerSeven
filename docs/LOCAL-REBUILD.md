@@ -94,8 +94,11 @@ provisiona VM o host automaticamente.
   vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
   configura route persistente DC02, firewall RDP e recupera il client config
   fuori repository.
-- **Persistenza CP2:** il bootstrap contract corrente è `v8`. La conferma attende
-  lo stato finale di rete fino a 45 s (timeout runner 60 s), mantenendo il
+- **Persistenza CP2:** il bootstrap contract corrente è `v9`. Dopo `netplan generate`
+  verifica i file networkd MAC-matched, ricarica e riconfigura le due NIC; se
+  restano unmanaged esegue un singolo restart protetto di systemd-networkd.
+  La conferma attende lo stato finale di rete entro un budget Linux di 45 s
+  (timeout runner 75 s), mantenendo il
   rollback guard attivo. Dopo la conferma
   il file `/etc/netplan/99-powerseven.yaml` deve restare root:root `600`,
   validato con `netplan generate`, con entrambe le NIC matchate per MAC; il

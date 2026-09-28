@@ -57,7 +57,12 @@ Il checkpoint riconosce le interfacce dall'indirizzo/subnet e dal MAC, non da
 rollback e richiede una conferma dal runner dopo la riconnessione a
 `192.168.214.14`. La NIC bridged mantiene il DHCP ma usa
 `dhcp4-overrides: use-routes: false` e `use-dns: false`; dopo `netplan apply`
-la validazione DHCP è bounded a 45 secondi prima di attivare il rollback. Dopo
+il bootstrap verifica i due file `.network` generati sotto
+`/run/systemd/network/` tramite MAC, abilita systemd-networkd, esegue
+`networkctl reload` e `reconfigure`; se le NIC restano unmanaged per 3 secondi
+effettua un singolo restart protetto e riprova per altri 3 secondi. Poi la
+validazione completa è bounded a 45 secondi prima del rollback. Il rollback
+riapplica Netplan e ricarica/reconfigura networkd. Dopo
 la conferma il file `/etc/netplan/99-powerseven.yaml` resta persistente,
 root-owned, mode `600` e validato con `netplan generate`; un check con runtime
 corretto ma sorgente persistente assente richiede remediation. La validazione

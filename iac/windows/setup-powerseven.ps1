@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '8'
+$requiredBootstrapVersion = '9'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -1170,7 +1170,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 8\ncheckpoints=1,2,3')"
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 9\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1294,7 +1294,7 @@ sudo rm -rf "$backup" "$stage"
 
         $confirmArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '2' -ExtraOption '--confirm-network' -ExtraValue $networkToken)
         Write-Result 'INFO' 'checkpoint' 'remote command=sudo -n /usr/local/sbin/powerseven-bootstrap --apply --checkpoint 2 --confirm-network <redacted>'
-        $confirmResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments) -TimeoutSeconds 60
+        $confirmResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments) -TimeoutSeconds 75
         Write-NativeResultOutput -Result $confirmResult
         if ($confirmResult.TimedOut) {
             throw 'VPS14 network confirmation exceeded the bounded timeout; rollback guard remains active'
