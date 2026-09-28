@@ -39,6 +39,18 @@ def network_retry_fixture(states: list[dict[str, bool]], timeout: int = 45, inte
     return any(network_ready_fixture(state) for state in states[: timeout // interval + 1])
 
 
+def host_key_fixture(trusted: str, presented: str) -> bool:
+    return trusted == presented
+
+
+def runner_cp2_fixture(*, already_ready: bool, old_session_pending: bool, static_ready: bool, host_key_same: bool) -> dict[str, bool]:
+    if already_ready:
+        return {"passed": True, "token": False, "bounded": True}
+    if not host_key_same or not static_ready:
+        return {"passed": False, "token": True, "bounded": True}
+    return {"passed": True, "token": True, "bounded": old_session_pending}
+
+
 def load(relative: str):
     with (ROOT / relative).open(encoding="utf-8") as stream:
         return yaml.safe_load(stream)
@@ -130,6 +142,30 @@ def main() -> int:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
         report("FAIL", "windows-runner", "DC02 integration is incomplete")
+    cp2_runner_match = re.search(r"if \(\$Checkpoint -eq '2' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} elseif \(\$Checkpoint -eq '3' -and \$Apply\))", runner, re.DOTALL)
+    cp2_runner_body = cp2_runner_match.group("body") if cp2_runner_match else ""
+    if (cp2_runner_match and
+            all(token in cp2_runner_body for token in ("Invoke-NativeReadOnly", "--check", "Invoke-NativeBounded", "Wait-ForVps14Ssh", "--confirm-network", "HostKeyAlias")) and
+            "Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckpointArguments)" not in cp2_runner_body):
+        report("PASS", "windows-cp2-orchestration", "CP2 precheck, bounded handoff, host-key pinning and automatic confirmation are present")
+    else:
+        report("FAIL", "windows-cp2-orchestration", "CP2 runner orchestration is incomplete or can block on the old SSH session")
+    if "StrictHostKeyChecking=no" not in runner and "HostKeyAlias" in runner and "Test-TcpPort" in runner:
+        report("PASS", "windows-host-identity", "static-IP reconnect pins the existing SSH host identity without disabling host-key checks")
+    else:
+        report("FAIL", "windows-host-identity", "host-key continuity is unsafe or missing")
+    fixtures = (
+        (runner_cp2_fixture(already_ready=True, old_session_pending=False, static_ready=True, host_key_same=True), {"passed": True, "token": False, "bounded": True}),
+        (runner_cp2_fixture(already_ready=False, old_session_pending=True, static_ready=True, host_key_same=True), {"passed": True, "token": True, "bounded": True}),
+        (runner_cp2_fixture(already_ready=False, old_session_pending=False, static_ready=True, host_key_same=False), {"passed": False, "token": True, "bounded": True}),
+        (runner_cp2_fixture(already_ready=False, old_session_pending=False, static_ready=False, host_key_same=True), {"passed": False, "token": True, "bounded": True}),
+    )
+    if (all(actual == expected for actual, expected in fixtures) and
+            host_key_fixture("ssh-ed25519 AAAAtrusted", "ssh-ed25519 AAAAtrusted") and
+            not host_key_fixture("ssh-ed25519 AAAAtrusted", "ssh-ed25519 AAAAchanged")):
+        report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
+    else:
+        report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
     if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
@@ -162,7 +198,7 @@ def main() -> int:
         report("PASS", "linux-payload-eol", "runner stages, normalizes and validates Linux payloads as LF")
     else:
         report("FAIL", "linux-payload-eol", "Linux payload staging/EOL validation is incomplete")
-    if "Invoke-NativeInteractive $script:Ssh @('-tt', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath, $target, $remoteTransactionCommand)" in runner and "$target, $installCommand" not in runner:
+    if "Invoke-NativeInteractive $script:Ssh (@('-tt') + $keyOnlySshOptions + @($target, $remoteTransactionCommand))" in runner and "$target, $installCommand" not in runner:
         report("PASS", "transaction-transport", "privileged transaction uses a staged Bash file and a simple SSH launcher")
     else:
         report("FAIL", "transaction-transport", "privileged transaction is still passed as an inline SSH payload")

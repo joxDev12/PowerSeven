@@ -79,8 +79,13 @@ arbitrari. La policy sudo è `NOPASSWD` soltanto per quel wrapper.
 
 Dopo la prima esecuzione, riaprire PowerShell non richiede una nuova password:
 usare la stessa chiave persistente e, per evitare anche il prompt username,
-passare `-UbuntuUsername`. CP2 configura VMnet8 statico `.14` e Bridged DHCP
-senza default route/DNS, usando un rollback guard prima della conferma.
+passare `-UbuntuUsername`. CP2 esegue prima un check remoto read-only: se `.14`
+è già conforme termina senza token o nuova transazione; altrimenti configura
+VMnet8 statico `.14` e Bridged DHCP senza default route/DNS. Il passaggio `.145`
+→ `.14` usa una sessione SSH con timeout bounded, attende il nuovo endpoint e
+riusa la host identity della sessione DHCP tramite `HostKeyAlias`; il token di
+rete viene confermato automaticamente. Il rollback guard resta attivo fino a
+quella conferma.
 CP3 configura `wg-admin` su VPS14, aggiunge su DC02 la route persistente
 `10.99.0.0/24 via 192.168.214.14`, limita RDP alla subnet VPN e salva il client
 config in `C:\ProgramData\PowerSeven\clients\`. WireGuard CLI non viene

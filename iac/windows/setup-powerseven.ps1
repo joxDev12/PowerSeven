@@ -306,6 +306,61 @@ function Invoke-NativeCapture {
     }
 }
 
+function Invoke-NativeBounded {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [ValidateRange(1, 120)]
+        [int]$TimeoutSeconds
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.Arguments = (($ArgumentList | ForEach-Object {
+        ConvertTo-WindowsProcessArgument -Value $_
+    }) -join ' ')
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start bounded command: $FilePath"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            try { $process.Kill() } catch { }
+            $process.WaitForExit()
+        }
+        return [pscustomobject]@{
+            ExitCode = if ($completed) { $process.ExitCode } else { $null }
+            TimedOut = -not $completed
+            StandardOutput = [string]$stdoutTask.Result
+            StandardError = [string]$stderrTask.Result
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Write-NativeResultOutput {
+    param([pscustomobject]$Result)
+
+    foreach ($line in ([string]$Result.StandardOutput -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host $line }
+    }
+    foreach ($line in ([string]$Result.StandardError -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace($line)) { Write-Host $line }
+    }
+}
+
 function Invoke-NativeReadOnly {
     param(
         [string]$FilePath,
@@ -381,17 +436,99 @@ function Test-SshKeyAuthentication {
     param(
         [string]$SshPath,
         [string]$KeyPath,
-        [string]$Target
+        [string]$Target,
+        [string]$HostKeyAlias = ''
     )
 
-    return Test-NativeSuccess $SshPath @(
+    $result = Invoke-SshKeyAuthenticationProbe -SshPath $SshPath -KeyPath $KeyPath -Target $Target -HostKeyAlias $HostKeyAlias
+    return ($result.ExitCode -eq 0)
+}
+
+function Invoke-SshKeyAuthenticationProbe {
+    param(
+        [string]$SshPath,
+        [string]$KeyPath,
+        [string]$Target,
+        [string]$HostKeyAlias = ''
+    )
+
+    $arguments = @(
         '-o', 'BatchMode=yes',
         '-o', 'PasswordAuthentication=no',
         '-o', 'IdentitiesOnly=yes',
+        '-o', 'ConnectTimeout=10',
+        '-o', 'ServerAliveInterval=5',
+        '-o', 'ServerAliveCountMax=2',
         '-i', $KeyPath,
         $Target,
         'true'
     )
+    if (-not [string]::IsNullOrWhiteSpace($HostKeyAlias)) {
+        $arguments = @('-o', "HostKeyAlias=$HostKeyAlias") + $arguments
+    }
+    return Invoke-NativeCapture $SshPath $arguments
+}
+
+function Test-TcpPort {
+    param(
+        [string]$Address,
+        [int]$Port,
+        [ValidateRange(100, 10000)]
+        [int]$TimeoutMilliseconds = 1000
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect($Address, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMilliseconds)) {
+            return $false
+        }
+        $client.EndConnect($async)
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $client.Close()
+    }
+}
+
+function Wait-ForVps14Ssh {
+    param(
+        [string]$SshPath,
+        [string]$KeyPath,
+        [string]$Address,
+        [string]$Username,
+        [string]$HostKeyAlias,
+        [ValidateRange(1, 120)]
+        [int]$TimeoutSeconds = 60,
+        [ValidateRange(1, 10)]
+        [int]$IntervalSeconds = 2
+    )
+
+    $target = '{0}@{1}' -f $Username, $Address
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($stopwatch.Elapsed.TotalSeconds -le $TimeoutSeconds) {
+        $elapsed = [int][math]::Floor($stopwatch.Elapsed.TotalSeconds)
+        if (Test-TcpPort -Address $Address -Port 22) {
+            $probe = Invoke-SshKeyAuthenticationProbe -SshPath $SshPath -KeyPath $KeyPath -Target $target -HostKeyAlias $HostKeyAlias
+            if ($probe.ExitCode -eq 0) {
+                return $true
+            }
+            $diagnostic = '{0} {1}' -f $probe.StandardError, $probe.StandardOutput
+            if ($diagnostic -match '(?i)(host key verification failed|remote host identification has changed|no .* host key is known)') {
+                throw 'VPS14 static address host key does not match the previously trusted DHCP identity; refusing connection'
+            }
+            Write-Result 'INFO' 'network' ("{0}:22 reachable; key-only authentication pending ({1}s/{2}s)" -f $Address, $elapsed, $TimeoutSeconds)
+        } else {
+            Write-Result 'INFO' 'network' ("waiting for {0}:22 ({1}s/{2}s)" -f $Address, $elapsed, $TimeoutSeconds)
+        }
+        $remaining = $TimeoutSeconds - [int][math]::Floor($stopwatch.Elapsed.TotalSeconds)
+        if ($remaining -le 0) { break }
+        Start-Sleep -Seconds ([math]::Min($IntervalSeconds, $remaining))
+    }
+    return $false
 }
 
 function Test-BootstrapProtocol {
@@ -401,6 +538,7 @@ function Test-BootstrapProtocol {
         [string]$Target,
         [string]$RequiredVersion,
         [string]$RequiredCapabilities,
+        [string]$HostKeyAlias = '',
         [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
         [string]$RequiredCheckpoint
     )
@@ -409,8 +547,14 @@ function Test-BootstrapProtocol {
         '-o', 'BatchMode=yes',
         '-o', 'PasswordAuthentication=no',
         '-o', 'IdentitiesOnly=yes',
+        '-o', 'ConnectTimeout=10',
+        '-o', 'ServerAliveInterval=5',
+        '-o', 'ServerAliveCountMax=2',
         '-i', $KeyPath
     )
+    if (-not [string]::IsNullOrWhiteSpace($HostKeyAlias)) {
+        $sshOptions += @('-o', "HostKeyAlias=$HostKeyAlias")
+    }
 
     if (-not (Test-NativeSuccess $SshPath ($sshOptions + @($Target, 'test', '-x', '/usr/local/sbin/powerseven-bootstrap')))) {
         return $false
@@ -445,11 +589,12 @@ function Test-ExistingBootstrapInstallation {
         [string]$Target,
         [string]$RequiredVersion,
         [string]$RequiredCapabilities,
+        [string]$HostKeyAlias = '',
         [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
         [string]$RequiredCheckpoint
     )
 
-    $protocolSupported = Test-BootstrapProtocol -SshPath $SshPath -KeyPath $KeyPath -Target $Target -RequiredVersion $RequiredVersion -RequiredCapabilities $RequiredCapabilities -RequiredCheckpoint $RequiredCheckpoint
+    $protocolSupported = Test-BootstrapProtocol -SshPath $SshPath -KeyPath $KeyPath -Target $Target -RequiredVersion $RequiredVersion -RequiredCapabilities $RequiredCapabilities -HostKeyAlias $HostKeyAlias -RequiredCheckpoint $RequiredCheckpoint
     if (-not $protocolSupported) {
         return [pscustomobject]@{ Ready = $false; ProtocolSupported = $false }
     }
@@ -741,6 +886,7 @@ $keyDirectory = Join-Path $env:ProgramData 'PowerSeven\ssh'
 $keyPath = Join-Path $keyDirectory 'powerseven-vps14_ed25519'
 $publicKeyPath = '{0}.pub' -f $keyPath
 $target = '{0}@{1}' -f $UbuntuUsername, $Vps14Address
+$targetHostKeyAlias = ''
 
 if ($Check) {
     if (-not (Test-SshKeyPair -KeyPath $keyPath -PublicKeyPath $publicKeyPath)) {
@@ -763,15 +909,36 @@ if ($publicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( .*)?$' -or $publicK
 
 if ($Checkpoint -in @('2', '3') -and $Vps14Address -ne '192.168.214.14') {
     $staticTarget = '{0}@192.168.214.14' -f $UbuntuUsername
-    if (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $staticTarget) {
+    if (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $staticTarget -HostKeyAlias $Vps14Address) {
         Write-Result 'PASS' 'vps14-address' 'existing static VPS14 address 192.168.214.14 selected'
+        $targetHostKeyAlias = $Vps14Address
         $Vps14Address = '192.168.214.14'
         $target = $staticTarget
     }
 }
 
 Write-Result 'INFO' 'ssh-key-auth' 'probing existing key-only authentication; no password prompt expected'
-if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target)) {
+$sshKeyAuthentication = Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias
+if (-not $sshKeyAuthentication -and $Vps14Address -eq '192.168.214.14' -and [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+    if (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias '192.168.214.145') {
+        $targetHostKeyAlias = '192.168.214.145'
+        $sshKeyAuthentication = $true
+        Write-Result 'PASS' 'vps14-hostkey' 'static address verified against the trusted DHCP host identity'
+    }
+}
+$keyOnlySshOptions = @(
+    '-o', 'BatchMode=yes',
+    '-o', 'PasswordAuthentication=no',
+    '-o', 'IdentitiesOnly=yes',
+    '-o', 'ConnectTimeout=10',
+    '-o', 'ServerAliveInterval=5',
+    '-o', 'ServerAliveCountMax=2',
+    '-i', $keyPath
+)
+if (-not [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+    $keyOnlySshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
+}
+if (-not $sshKeyAuthentication) {
     if ($Check -or $PrepareBootstrap) {
         Write-Result 'FAIL' 'ssh-key-auth' 'key-only authentication failed; read-only/prepare mode will not enroll a key'
         exit 1
@@ -820,19 +987,22 @@ trap - EXIT
     $enrollCommand = $enrollCommand.Replace('__BACKUP__', $enrollmentBackupName).Replace('__MARKER__', $enrollmentMarkerName).Replace('__KEY__', $publicKey)
     $enrollCommand = ConvertTo-LinuxLf -Name 'SSH enrollment command' -Content $enrollCommand
     try {
-        Invoke-NativeInteractive $script:Ssh @(
+        $enrollmentSshOptions = @(
             '-tt',
             '-o', 'PreferredAuthentications=password',
             '-o', 'PubkeyAuthentication=no',
-            $target,
-            $enrollCommand
+            '-o', 'ConnectTimeout=10'
         )
+        if (-not [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+            $enrollmentSshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
+        }
+        Invoke-NativeInteractive $script:Ssh ($enrollmentSshOptions + @($target, $enrollCommand))
     }
     catch {
         throw ('SSH enrollment failed; no remote mutation was attempted unless SSH authentication succeeded: {0}' -f $_.Exception.Message)
     }
 
-    if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target)) {
+    if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias)) {
         Write-Result 'WARN' 'ssh-enrollment' 'key-only verification failed; rolling back only the PowerSeven key'
         $rollbackCommand = @'
 set -eu
@@ -853,13 +1023,7 @@ if [ -f "$auth" ]; then chmod 600 "$auth"; fi
         $rollbackCommand = $rollbackCommand.Replace('__BACKUP__', $enrollmentBackupName).Replace('__MARKER__', $enrollmentMarkerName).Replace('__TOKEN__', $enrollmentToken).Replace('__KEY__', $publicKey)
         $rollbackCommand = ConvertTo-LinuxLf -Name 'SSH enrollment rollback command' -Content $rollbackCommand
         try {
-            Invoke-NativeInteractive $script:Ssh @(
-                '-tt',
-                '-o', 'PreferredAuthentications=password',
-                '-o', 'PubkeyAuthentication=no',
-                $target,
-                $rollbackCommand
-            )
+            Invoke-NativeInteractive $script:Ssh ($enrollmentSshOptions + @($target, $rollbackCommand))
         }
         catch {
             throw ('SSH enrollment failed and rollback could not be confirmed: {0}' -f $_.Exception.Message)
@@ -869,24 +1033,16 @@ if [ -f "$auth" ]; then chmod 600 "$auth"; fi
 
     $cleanupEnrollmentCommand = 'rm -f "$HOME/.ssh/{0}" "$HOME/.ssh/{1}"' -f $enrollmentBackupName, $enrollmentMarkerName
     $cleanupEnrollmentCommand = ConvertTo-LinuxLf -Name 'SSH enrollment cleanup command' -Content $cleanupEnrollmentCommand
-    Invoke-Native $script:Ssh @(
-        '-o', 'BatchMode=yes',
-        '-o', 'PasswordAuthentication=no',
-        '-o', 'IdentitiesOnly=yes',
-        '-i', $keyPath,
-        $target,
-        $cleanupEnrollmentCommand
-    )
+    Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $cleanupEnrollmentCommand))
     Write-Result 'PASS' 'ssh-enrollment' 'key-only authentication verified'
 }
-if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target)) {
+if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target -HostKeyAlias $targetHostKeyAlias)) {
     throw 'SSH key authentication failed after enrollment'
 }
 Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
 
-$keyOnlySshOptions = @('-o', 'BatchMode=yes', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath)
 if ($Check) {
-    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -RequiredCheckpoint $Checkpoint
+    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
     if (-not $bootstrapProbe.ProtocolSupported) {
         Write-Result 'WARN' 'bootstrap' ("installed version/capabilities do not support checkpoint {0}" -f $Checkpoint)
         Write-Result 'MISSING' 'bootstrap' 'migration required; no remote mutation was performed'
@@ -915,7 +1071,7 @@ $localRouteState = $null
 $localFirewallState = $null
 $remoteClientStaged = $false
 try {
-    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -RequiredCheckpoint $Checkpoint
+    $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
     if ($bootstrapProbe.Ready) {
         Write-Result 'PASS' 'bootstrap' 'existing installation validated'
     } else {
@@ -1027,7 +1183,7 @@ sudo rm -rf "$backup" "$stage"
         Invoke-Native $script:Scp ($keyOnlySshOptions + @($transactionPath, ($target + ':' + $remoteStageDir + '/powerseven-install-transaction.sh')))
         $remoteTransactionCommand = ConvertTo-LinuxLf -Name 'privileged bootstrap transaction launcher' -Content ('bash "{0}/powerseven-install-transaction.sh"' -f $remoteStageDir)
         try {
-            Invoke-NativeInteractive $script:Ssh @('-tt', '-o', 'PasswordAuthentication=no', '-o', 'IdentitiesOnly=yes', '-i', $keyPath, $target, $remoteTransactionCommand)
+            Invoke-NativeInteractive $script:Ssh (@('-tt') + $keyOnlySshOptions + @($target, $remoteTransactionCommand))
         }
         catch {
             throw ('privileged bootstrap transaction failed; staged files were cleaned and prior installation was restored when necessary: {0}' -f $_.Exception.Message)
@@ -1054,25 +1210,94 @@ sudo rm -rf "$backup" "$stage"
     Write-Result 'INFO' 'checkpoint' ("mode={0} checkpoint={1}" -f $action.TrimStart('-'), $Checkpoint)
 
     if ($Checkpoint -eq '2' -and $Apply) {
+        $originalAddress = $Vps14Address
+        $originalHostKeyAlias = $targetHostKeyAlias
+        $networkCheckArguments = @(New-RemoteCheckpointArguments -Action '--check' -Checkpoint '2')
+        Write-Result 'INFO' 'checkpoint' 'checking current network state before opening a DHCP-to-static transaction'
+        $networkCheck = Invoke-NativeReadOnly $script:Ssh ($keyOnlySshOptions + @($target) + $networkCheckArguments)
+        if ($networkCheck.ExitCode -eq 0 -and -not $networkCheck.HasRemediation) {
+            Write-Result 'PASS' 'network' 'VPS14 network already matches the CP2 target; no transition required'
+            exit 0
+        }
+        if (-not $networkCheck.HasRemediation) {
+            throw "VPS14 CP2 read-only check failed with exit code $($networkCheck.ExitCode); refusing to start a network transaction"
+        }
+
         $networkToken = [guid]::NewGuid().ToString('N')
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '2' -ExtraOption '--network-token' -ExtraValue $networkToken)
         Write-Result 'INFO' 'checkpoint' 'network transition may close the current DHCP SSH session'
-        Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($remoteCheckpointArguments -join ' '))
-        try {
-            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckpointArguments)
+        Write-Result 'INFO' 'checkpoint' 'remote command=sudo -n /usr/local/sbin/powerseven-bootstrap --apply --checkpoint 2 --network-token <redacted>'
+        $transitionResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckpointArguments) -TimeoutSeconds 15
+        Write-NativeResultOutput -Result $transitionResult
+        if ($transitionResult.TimedOut) {
+            Write-Result 'WARN' 'checkpoint' 'old DHCP SSH session exceeded its bounded handoff window; validating the static address'
+        } elseif ($transitionResult.ExitCode -ne 0) {
+            Write-Result 'WARN' 'checkpoint' ("old DHCP SSH session ended with exit code {0}; validating the static address" -f $transitionResult.ExitCode)
         }
-        catch {
-            Write-Result 'WARN' 'checkpoint' 'old DHCP address disconnected during the expected network transition; validating the static address'
-        }
+
         $Vps14Address = '192.168.214.14'
         $target = '{0}@{1}' -f $UbuntuUsername, $Vps14Address
-        if (-not (Test-SshKeyAuthentication -SshPath $script:Ssh -KeyPath $keyPath -Target $target)) {
-            throw 'VPS14 did not become reachable through the new static address; its rollback guard remains active'
+        $targetHostKeyAlias = if ($originalAddress -eq '192.168.214.14') { $originalHostKeyAlias } else { $originalAddress }
+        $keyOnlySshOptions = @(
+            '-o', 'BatchMode=yes',
+            '-o', 'PasswordAuthentication=no',
+            '-o', 'IdentitiesOnly=yes',
+            '-o', 'ConnectTimeout=10',
+            '-o', 'ServerAliveInterval=5',
+            '-o', 'ServerAliveCountMax=2',
+            '-i', $keyPath
+        )
+        if (-not [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
+            $keyOnlySshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
         }
+
+        $staticReachable = $false
+        $staticFailure = $null
+        try {
+            $staticReachable = Wait-ForVps14Ssh -SshPath $script:Ssh -KeyPath $keyPath -Address $Vps14Address -Username $UbuntuUsername -HostKeyAlias $targetHostKeyAlias -TimeoutSeconds 60 -IntervalSeconds 2
+        }
+        catch {
+            $staticFailure = $_.Exception.Message
+        }
+        if (-not $staticReachable) {
+            $rollbackReachable = $false
+            $rollbackFailure = $null
+            try {
+                $rollbackReachable = Wait-ForVps14Ssh -SshPath $script:Ssh -KeyPath $keyPath -Address $originalAddress -Username $UbuntuUsername -HostKeyAlias $originalHostKeyAlias -TimeoutSeconds 20 -IntervalSeconds 2
+            }
+            catch {
+                $rollbackFailure = $_.Exception.Message
+            }
+            if ($null -ne $staticFailure) {
+                if ($rollbackReachable) {
+                    throw ("{0}; rollback restored {1}" -f $staticFailure, $originalAddress)
+                }
+                throw ("{0}; rollback address {1} was not reachable within the bounded recovery window" -f $staticFailure, $originalAddress)
+            }
+            if ($rollbackReachable) {
+                throw ("VPS14 static address did not become reachable before timeout; rollback restored {0}" -f $originalAddress)
+            }
+            if ($null -ne $rollbackFailure) {
+                throw ("VPS14 static address did not become reachable before timeout; rollback verification failed: {0}" -f $rollbackFailure)
+            }
+            throw ("VPS14 static address did not become reachable before timeout; rollback address {0} was not reachable within the bounded recovery window" -f $originalAddress)
+        }
+
         $confirmArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '2' -ExtraOption '--confirm-network' -ExtraValue $networkToken)
-        Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($confirmArguments -join ' '))
-        Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments)
-        Write-Result 'PASS' 'network' 'DHCP .145 to static .14 transition confirmed'
+        Write-Result 'INFO' 'checkpoint' 'remote command=sudo -n /usr/local/sbin/powerseven-bootstrap --apply --checkpoint 2 --confirm-network <redacted>'
+        $confirmResult = Invoke-NativeBounded $script:Ssh ($keyOnlySshOptions + @($target) + $confirmArguments) -TimeoutSeconds 20
+        Write-NativeResultOutput -Result $confirmResult
+        if ($confirmResult.TimedOut) {
+            throw 'VPS14 network confirmation exceeded the bounded timeout; rollback guard remains active'
+        }
+        if ($confirmResult.ExitCode -ne 0) {
+            throw "VPS14 network confirmation failed with exit code $($confirmResult.ExitCode); rollback guard remains active"
+        }
+        if ($originalAddress -eq '192.168.214.145') {
+            Write-Result 'PASS' 'network' 'DHCP .145 to static .14 transition confirmed'
+        } else {
+            Write-Result 'PASS' 'network' 'VPS14 CP2 network transaction confirmed'
+        }
     } elseif ($Checkpoint -eq '3' -and $Apply) {
         $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
         $clientConfigPath = Join-Path $clientDirectory 'powerseven-admin-laptop.conf'
