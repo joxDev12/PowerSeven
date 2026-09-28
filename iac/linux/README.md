@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `5`; ogni modifica
+- il contratto corrente del bootstrap è la versione `6`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - il checkpoint 2 configurerà le due NIC: VMnet8 statico `.14` con gateway
@@ -55,7 +55,11 @@ Il checkpoint riconosce le interfacce dall'indirizzo/subnet e dal MAC, non da
 rollback e richiede una conferma dal runner dopo la riconnessione a
 `192.168.214.14`. La NIC bridged mantiene il DHCP ma usa
 `dhcp4-overrides: use-routes: false` e `use-dns: false`; dopo `netplan apply`
-la validazione DHCP è bounded a 45 secondi prima di attivare il rollback.
+la validazione DHCP è bounded a 45 secondi prima di attivare il rollback. Dopo
+la conferma il file `/etc/netplan/99-powerseven.yaml` resta persistente,
+root-owned, mode `600` e validato con `netplan generate`; un check con runtime
+corretto ma sorgente persistente assente richiede remediation. La validazione
+definitiva include un reboot controllato e un nuovo `--check --checkpoint 2`.
 
 ## Checkpoint 3 — VPN amministrativo
 

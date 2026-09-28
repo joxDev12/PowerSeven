@@ -94,6 +94,10 @@ provisiona VM o host automaticamente.
   vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
   configura route persistente DC02, firewall RDP e recupera il client config
   fuori repository.
+- **Persistenza CP2:** il bootstrap contract corrente è `v6`. Dopo la conferma
+  il file `/etc/netplan/99-powerseven.yaml` deve restare root:root `600`,
+  validato con `netplan generate`, con entrambe le NIC matchate per MAC; il
+  check non considera sufficiente il solo stato runtime.
 - **Prerequisiti:** PHASE 2 PASS; placeholder risolti in workspace locale;
   password e chiavi fuori Git.
 - **Risultato atteso:** Ubuntu Desktop/Server e Windows Server 2022 Desktop
@@ -121,8 +125,17 @@ provisiona VM o host automaticamente.
 - **Prerequisiti:** OS installato; VMnet8/gateway validati.
 - **Risultato atteso:** VMnet8 `.12/.13/.14` statici, gateway `.2`, DNS DC02
   `.13`; NIC Bridged DHCP senza default route/DNS e senza collisione subnet.
-- **Stato:** **IMPLEMENTED / NOT YET LIVE VALIDATED** per CP2 Linux; la rete
-  VPS13 Windows è **LIVE VALIDATED** con interfaccia reale.
+- **Stato:** **IMPLEMENTED / REQUIRES LIVE REBOOT VALIDATION** per CP2 Linux;
+  il precedente runtime CP2 era LIVE VALIDATED, ma il test post-reboot ha
+  rilevato `/etc/netplan` vuota. Il fix v6 aggiunge validazione persistence,
+  lock transaction e isolamento dei rollback; va migrato e ritestato prima di
+  dichiarare CP2 definitivamente LIVE VALIDATED. La rete VPS13 Windows è
+  **LIVE VALIDATED** con interfaccia reale.
+- **Reboot acceptance CP2:** dopo `-Apply` e conferma token, eseguire un
+  reboot manuale controllato; poi `-Check -Checkpoint 2` deve verificare
+  `.14/24`, Bridged DHCP, unica default route `.2`, DNS `.13`, networkd
+  managed e `99-powerseven.yaml` persistente/valido. Non è automatizzato dal
+  normale Apply.
 
 ### PHASE 5 — VPS13 AD/DNS
 

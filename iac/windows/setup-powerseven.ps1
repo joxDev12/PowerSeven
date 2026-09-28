@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '5'
+$requiredBootstrapVersion = '6'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -1160,7 +1160,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --version)" = 'powerseven-bootstrap 5'
+test "$(sudo "$wrapper" --version)" = 'powerseven-bootstrap 6'
 test "$(sudo "$wrapper" --capabilities)" = 'checkpoints=1,2,3'
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"

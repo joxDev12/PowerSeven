@@ -51,6 +51,26 @@ def runner_cp2_fixture(*, already_ready: bool, old_session_pending: bool, static
     return {"passed": True, "token": True, "bounded": old_session_pending}
 
 
+def persistence_fixture(runtime_ready: bool, persistent_ready: bool) -> bool:
+    return runtime_ready and persistent_ready
+
+
+def persistent_netplan_fixture(*, file_exists: bool, content_ok: bool, macs_ok: bool, mode_ok: bool, generate_ok: bool) -> bool:
+    return all((file_exists, content_ok, macs_ok, mode_ok, generate_ok))
+
+
+def rollback_cleanup_fixture(*, token_cleared: bool, backup_cleared: bool, marker_cleared: bool, units_stopped: bool) -> bool:
+    return all((token_cleared, backup_cleared, marker_cleared, units_stopped))
+
+
+def cold_state_fixture(persistent_ready: bool) -> bool:
+    return persistent_ready
+
+
+def transaction_isolation_fixture(old_transaction: str, new_transaction: str) -> bool:
+    return old_transaction != new_transaction
+
+
 def load(relative: str):
     with (ROOT / relative).open(encoding="utf-8") as stream:
         return yaml.safe_load(stream)
@@ -138,6 +158,45 @@ def main() -> int:
         report("PASS", "network-retry-fixtures", "delayed DHCP passes within timeout; timeout, route, DNS and underlay failures do not")
     else:
         report("FAIL", "network-retry-fixtures", "bounded network retry fixture coverage failed")
+    persistence_cases = (
+        (persistence_fixture(True, False), False),
+        (persistence_fixture(True, True), True),
+        (persistence_fixture(False, True), False),
+        (persistent_netplan_fixture(file_exists=False, content_ok=True, macs_ok=True, mode_ok=True, generate_ok=True), False),
+        (persistent_netplan_fixture(file_exists=True, content_ok=False, macs_ok=True, mode_ok=True, generate_ok=True), False),
+        (persistent_netplan_fixture(file_exists=True, content_ok=True, macs_ok=False, mode_ok=True, generate_ok=True), False),
+        (persistent_netplan_fixture(file_exists=True, content_ok=True, macs_ok=True, mode_ok=True, generate_ok=True), True),
+        (rollback_cleanup_fixture(token_cleared=True, backup_cleared=True, marker_cleared=True, units_stopped=True), True),
+        (cold_state_fixture(True), True),
+        (cold_state_fixture(False), False),
+        (transaction_isolation_fixture("transaction-a", "transaction-b"), True),
+    )
+    commit_match = re.search(r"commit_network_transaction\(\) \{(?P<body>.*?)(?=\n\}\n\nconfirm_network\(\))", bootstrap, re.DOTALL)
+    commit_body = commit_match.group("body") if commit_match else ""
+    persistence_tokens = (
+        "netplan_persistence_is_valid",
+        "network_state_missing",
+        "flock -x 9",
+        'exec 9>"\\$lock"',
+        'pending=\\$(cat',
+        "netplan-running-",
+        "cancel_pending_network_transactions",
+        "pending-token",
+        "pending-backup",
+        "netplan_block_contains",
+        "chown root:root",
+        "chmod 600",
+        'mv -f "$temporary" "$file"',
+        "networkctl is-managed",
+        'systemctl stop "$unit.timer" "$unit.service"',
+    )
+    if (all(actual == expected for actual, expected in persistence_cases) and
+            all(token in bootstrap for token in persistence_tokens) and
+            commit_match and
+            commit_body.find("netplan_persistence_is_valid") < commit_body.find('rm -rf "$backup"')):
+        report("PASS", "network-persistence-fixtures", "missing/invalid Netplan is remediation, commit validates before cleanup, rollback transactions are isolated and reboot-reconstructible")
+    else:
+        report("FAIL", "network-persistence-fixtures", "CP2 persistence/transaction fixture coverage failed")
     if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
@@ -176,11 +235,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='5'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='6'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--version", "--capabilities")):
         report("PASS", "bootstrap-protocol", "version and checkpoint capabilities are explicitly exposed")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '5'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '6'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")

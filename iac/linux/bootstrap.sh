@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=0
-readonly POWERSEVEN_BOOTSTRAP_VERSION='5'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='6'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -29,6 +29,7 @@ readonly WG_CLIENT_STATE='/var/lib/powerseven/admin-vpn/clients/powerseven-admin
 readonly WG_CLIENT_EXPORT='/tmp/powerseven-admin-laptop.conf'
 readonly NETWORK_STATE_DIR='/var/lib/powerseven/network'
 readonly NETWORK_PENDING_DIR='/run/powerseven'
+readonly NETWORK_LOCK_FILE='/run/powerseven/network.lock'
 readonly NETWORK_READY_TIMEOUT_SECONDS=45
 readonly NETWORK_READY_INTERVAL_SECONDS=2
 
@@ -371,6 +372,78 @@ get_interface_link_state() {
     printf 'state=%s carrier=%s' "$operstate" "$carrier"
 }
 
+acquire_network_lock() {
+    install -d -m 0750 "$NETWORK_PENDING_DIR"
+    exec 9>"$NETWORK_LOCK_FILE"
+    flock -x 9
+}
+
+release_network_lock() {
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
+}
+
+stop_network_rollback_unit() {
+    local unit="powerseven-netplan-rollback-$1"
+    systemctl stop "$unit.timer" "$unit.service" 2>/dev/null || true
+    systemctl reset-failed "$unit.timer" "$unit.service" 2>/dev/null || true
+}
+
+cancel_pending_network_transactions() {
+    local unit pending_backup
+    while read -r unit _; do
+        [[ -n "$unit" ]] || continue
+        systemctl stop "$unit" 2>/dev/null || true
+    done < <(systemctl list-units --all --no-legend --plain 'powerseven-netplan-rollback-*' 2>/dev/null || true)
+
+    acquire_network_lock
+    pending_backup=$(cat "$NETWORK_STATE_DIR/pending-backup" 2>/dev/null || true)
+    rm -f "$NETWORK_PENDING_DIR"/netplan-pending-* \
+        "$NETWORK_PENDING_DIR"/netplan-running-* \
+        "$NETWORK_PENDING_DIR"/netplan-rollback-*
+    rm -f "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
+    if [[ "$pending_backup" == "$NETWORK_STATE_DIR/backups/"* ]]; then
+        rm -rf "$pending_backup"
+    fi
+    release_network_lock
+}
+
+netplan_persistence_is_valid() {
+    local file='/etc/netplan/99-powerseven.yaml' vmnet_mac bridged_mac metadata
+    [[ -f "$file" ]] || return 1
+    metadata=$(stat -c '%U:%G:%a' "$file" 2>/dev/null || true)
+    [[ "$metadata" == 'root:root:600' ]] || return 1
+    vmnet_mac=$(get_interface_mac "$VMNET8_IF")
+    bridged_mac=$(get_interface_mac "$BRIDGED_IF")
+    [[ "$vmnet_mac" =~ ^[0-9a-fA-F:]{17}$ && "$bridged_mac" =~ ^[0-9a-fA-F:]{17}$ ]] || return 1
+    netplan_block_contains() {
+        local block="$1" expected="$2"
+        awk -v block="    $block:" -v expected="$expected" '
+            $0 == block { in_block=1; next }
+            in_block && $0 ~ /^    [^ ]/ { in_block=0 }
+            in_block && index($0, expected) { found=1 }
+            END { exit !found }
+        ' "$file"
+    }
+    netplan_block_contains powerseven-underlay "match: {macaddress: $vmnet_mac}" || return 1
+    netplan_block_contains powerseven-underlay 'addresses: [192.168.214.14/24]' || return 1
+    netplan_block_contains powerseven-underlay 'via: 192.168.214.2' || return 1
+    netplan_block_contains powerseven-underlay 'addresses: [192.168.214.13]' || return 1
+    netplan_block_contains powerseven-bridged "match: {macaddress: $bridged_mac}" || return 1
+    netplan_block_contains powerseven-bridged 'dhcp4: true' || return 1
+    netplan_block_contains powerseven-bridged 'use-routes: false' || return 1
+    netplan_block_contains powerseven-bridged 'use-dns: false' || return 1
+    netplan generate >/dev/null 2>&1
+}
+
+validate_netplan_persistence() {
+    if ! netplan_persistence_is_valid; then
+        report FAIL network-persistence '99-powerseven.yaml is missing, invalid, mismatched or netplan generate failed'
+        return 1
+    fi
+    report PASS network-persistence '99-powerseven.yaml is root:root 600, MAC-matched and netplan generate passed'
+}
+
 detect_network_interfaces() {
     local name address interface_type
     local -a ethernet_candidates=() underlay_candidates=() bridged_candidates=()
@@ -431,6 +504,12 @@ report_network_state() {
         report FAIL bridged-default-route 'bridged NIC has an unexpected default route'
         return 1
     fi
+    if ! networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 ||
+       ! networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1; then
+        report FAIL networkd "systemd-networkd does not manage $VMNET8_IF and $BRIDGED_IF"
+        return 1
+    fi
+    report PASS networkd "managed=$VMNET8_IF,$BRIDGED_IF"
     if command -v resolvectl >/dev/null 2>&1; then
         dns_status=$(resolvectl dns "$VMNET8_IF" 2>/dev/null || true)
         if grep -Fq "$UNDERLAY_DNS" <<< "$dns_status"; then
@@ -443,6 +522,7 @@ report_network_state() {
         report FAIL dns 'resolvectl is unavailable; DNS binding cannot be verified safely'
         return 1
     fi
+    validate_netplan_persistence
 }
 
 verify_network_state() {
@@ -476,6 +556,9 @@ network_state_missing() {
         missing+='bridged default route present; '
     fi
 
+    networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 || missing+='underlay networkd unmanaged; '
+    networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1 || missing+='bridged networkd unmanaged; '
+
     if command -v resolvectl >/dev/null 2>&1; then
         dns_status=$(resolvectl dns "$VMNET8_IF" 2>/dev/null || true)
         grep -Fq "$UNDERLAY_DNS" <<< "$dns_status" || missing+='underlay DNS pending; '
@@ -486,6 +569,7 @@ network_state_missing() {
     else
         missing+='underlay DNS pending; '
     fi
+    netplan_persistence_is_valid || missing+='persistent Netplan pending; '
     printf '%s' "${missing%; }"
 }
 
@@ -507,7 +591,7 @@ wait_for_network_state() {
 }
 
 write_netplan_config() {
-    local file='/etc/netplan/99-powerseven.yaml'
+    local file='/etc/netplan/99-powerseven.yaml' temporary
     local vmnet_mac bridged_mac
     vmnet_mac=$(get_interface_mac "$VMNET8_IF")
     bridged_mac=$(get_interface_mac "$BRIDGED_IF")
@@ -516,6 +600,7 @@ write_netplan_config() {
     printf '%s\n' "$NETWORK_TRANSACTION_ID" > "$NETWORK_STATE_DIR/pending-token"
     printf '%s\n' "$VMNET8_IF" > "$NETWORK_STATE_DIR/underlay-interface"
     printf '%s\n' "$BRIDGED_IF" > "$NETWORK_STATE_DIR/bridged-interface"
+    temporary=$(mktemp /etc/netplan/.powerseven-netplan.XXXXXX)
     printf '%s\n' "network:" \
         '  version: 2' \
         '  renderer: networkd' \
@@ -533,29 +618,35 @@ write_netplan_config() {
         '      dhcp4: true' \
         '      dhcp4-overrides:' \
         '        use-routes: false' \
-        '        use-dns: false' > /etc/netplan/99-powerseven.yaml
-    chmod 600 "$file"
+        '        use-dns: false' > "$temporary"
+    chown root:root "$temporary"
+    chmod 600 "$temporary"
+    mv -f "$temporary" "$file"
 }
 
 backup_netplan() {
     local backup="$NETWORK_STATE_DIR/backups/$NETWORK_TRANSACTION_ID"
+    local file
+    local -a files=()
+    cancel_pending_network_transactions
     mkdir -p "$backup"
     rm -f "$backup"/*.yaml "$backup"/*.yml
     shopt -s nullglob
-    local files=(/etc/netplan/*.yaml /etc/netplan/*.yml)
-    local file
+    files=(/etc/netplan/*.yaml /etc/netplan/*.yml)
+    printf '%s\n' "$NETWORK_TRANSACTION_ID" > "$NETWORK_STATE_DIR/pending-token"
+    printf '%s\n' "$backup" > "$NETWORK_STATE_DIR/pending-backup"
     for file in "${files[@]}"; do
         cp -a "$file" "$backup/"
-        rm -f "$file"
     done
+    for file in "${files[@]}"; do rm -f "$file"; done
     shopt -u nullglob
-    printf '%s\n' "$backup" > "$NETWORK_STATE_DIR/pending-backup"
 }
 
 schedule_network_rollback() {
     local unit="powerseven-netplan-rollback-$NETWORK_TRANSACTION_ID"
     local script="$NETWORK_PENDING_DIR/netplan-rollback-$NETWORK_TRANSACTION_ID.sh"
     local marker="$NETWORK_PENDING_DIR/netplan-pending-$NETWORK_TRANSACTION_ID"
+    local running_marker="$NETWORK_PENDING_DIR/netplan-running-$NETWORK_TRANSACTION_ID"
     local backup
     backup=$(cat "$NETWORK_STATE_DIR/pending-backup")
     install -d -m 0750 "$NETWORK_PENDING_DIR"
@@ -563,14 +654,20 @@ schedule_network_rollback() {
     cat > "$script" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ ! -e '$marker' ]]; then exit 0; fi
+lock='$NETWORK_LOCK_FILE'
+exec 9>"\$lock"
+flock -x 9
+pending=\$(cat '$NETWORK_STATE_DIR/pending-token' 2>/dev/null || true)
+if [[ "\$pending" != '$NETWORK_TRANSACTION_ID' || ! -e '$marker' ]]; then exit 0; fi
+mv '$marker' '$running_marker'
 shopt -s nullglob
 for file in /etc/netplan/*.yaml /etc/netplan/*.yml; do rm -f "\$file"; done
 shopt -u nullglob
-cp -a '$backup'/.' /etc/netplan/ 2>/dev/null || true
+[[ -d '$backup' ]] || exit 1
+cp -a '$backup'/. /etc/netplan/
 netplan generate
 netplan apply
-rm -f '$marker' '$script'
+rm -f '$running_marker' '$script' '$NETWORK_STATE_DIR/pending-token' '$NETWORK_STATE_DIR/pending-backup'
 rm -rf '$backup'
 EOF
     chmod 700 "$script"
@@ -578,31 +675,73 @@ EOF
 }
 
 rollback_network_now() {
-    local transaction_id="$1" backup marker script unit
+    local transaction_id="$1" backup marker running_marker script pending
     backup=$(cat "$NETWORK_STATE_DIR/pending-backup" 2>/dev/null || true)
     marker="$NETWORK_PENDING_DIR/netplan-pending-$transaction_id"
+    running_marker="$NETWORK_PENDING_DIR/netplan-running-$transaction_id"
     script="$NETWORK_PENDING_DIR/netplan-rollback-$transaction_id.sh"
-    unit="powerseven-netplan-rollback-$transaction_id"
-    systemctl stop "$unit.timer" "$unit.service" 2>/dev/null || true
+    stop_network_rollback_unit "$transaction_id"
+    acquire_network_lock
+    pending=$(cat "$NETWORK_STATE_DIR/pending-token" 2>/dev/null || true)
+    if [[ "$pending" != "$transaction_id" || -e "$running_marker" ]]; then
+        release_network_lock
+        report WARN network 'rollback state belongs to another transaction or is already running; leaving it untouched'
+        return 1
+    fi
+    if [[ "$backup" != "$NETWORK_STATE_DIR/backups/"* || ! -d "$backup" ]]; then
+        release_network_lock
+        report FAIL network 'rollback backup is missing; refusing to delete the active Netplan configuration'
+        return 1
+    fi
+    rm -f "$marker"
     shopt -s nullglob
     local file
     for file in /etc/netplan/*.yaml /etc/netplan/*.yml; do rm -f "$file"; done
     shopt -u nullglob
-    [[ -n "$backup" ]] && cp -a "$backup"/. /etc/netplan/ 2>/dev/null || true
-    netplan generate && netplan apply || true
-    rm -f "$marker" "$script" "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
-    [[ -n "$backup" ]] && rm -rf "$backup"
+    cp -a "$backup"/. /etc/netplan/
+    if ! netplan generate || ! netplan apply; then
+        release_network_lock
+        report FAIL network 'rollback could not restore and apply the previous Netplan configuration'
+        return 1
+    fi
+    rm -f "$running_marker" "$script" "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
+    rm -rf "$backup"
+    release_network_lock
 }
 
 commit_network_transaction() {
-    local transaction_id="$1" backup marker script unit
+    local transaction_id="$1" backup marker running_marker script unit pending missing_state
     backup=$(cat "$NETWORK_STATE_DIR/pending-backup" 2>/dev/null || true)
     marker="$NETWORK_PENDING_DIR/netplan-pending-$transaction_id"
+    running_marker="$NETWORK_PENDING_DIR/netplan-running-$transaction_id"
     script="$NETWORK_PENDING_DIR/netplan-rollback-$transaction_id.sh"
     unit="powerseven-netplan-rollback-$transaction_id"
-    systemctl stop "$unit.timer" "$unit.service" 2>/dev/null || true
+    stop_network_rollback_unit "$transaction_id"
+    if systemctl is-active --quiet "$unit.timer" 2>/dev/null || systemctl is-active --quiet "$unit.service" 2>/dev/null; then
+        report FAIL network-confirm 'rollback timer/service is still active; preserving backup and pending state'
+        return 1
+    fi
+    acquire_network_lock
+    pending=$(cat "$NETWORK_STATE_DIR/pending-token" 2>/dev/null || true)
+    if [[ "$pending" != "$transaction_id" || ! -e "$marker" || -e "$running_marker" ]]; then
+        release_network_lock
+        report FAIL network-confirm 'rollback state changed or is already running; preserving backup and pending state'
+        return 1
+    fi
+    if [[ "$backup" != "$NETWORK_STATE_DIR/backups/"* || ! -d "$backup" ]]; then
+        release_network_lock
+        report FAIL network-confirm 'transaction backup is missing; refusing to commit the network change'
+        return 1
+    fi
+    missing_state=$(network_state_missing)
+    if [[ -n "$missing_state" ]] || ! netplan_persistence_is_valid; then
+        release_network_lock
+        report FAIL network-confirm 'runtime or persistent Netplan validation failed; preserving rollback state'
+        return 1
+    fi
     rm -f "$marker" "$script" "$NETWORK_STATE_DIR/pending-token" "$NETWORK_STATE_DIR/pending-backup"
-    [[ -n "$backup" ]] && rm -rf "$backup"
+    rm -rf "$backup"
+    release_network_lock
 }
 
 confirm_network() {
@@ -622,7 +761,7 @@ confirm_network() {
 }
 
 network_checkpoint() {
-    if ! require_commands ip awk grep netplan readlink systemd-run systemctl; then
+    if ! require_commands ip awk grep netplan readlink networkctl flock systemd-run systemctl; then
         return 1
     fi
     if [[ -n "$CONFIRM_NETWORK_TRANSACTION_ID" ]]; then
@@ -631,6 +770,11 @@ network_checkpoint() {
     fi
     if [[ "$MODE" == 'check' ]]; then
         if ! detect_network_interfaces; then
+            if [[ ! -f '/etc/netplan/99-powerseven.yaml' ]]; then
+                report MISSING network-persistence '99-powerseven.yaml is absent; runtime network cannot be considered boot-safe'
+            else
+                report MISSING network-persistence 'NIC discovery failed; persistent Netplan cannot be validated safely'
+            fi
             report SKIP network 'expected exactly one VMnet8 Ethernet interface and one other Ethernet candidate; bridged IPv4 may be none before apply'
             return 0
         fi
@@ -649,7 +793,10 @@ network_checkpoint() {
         report FAIL network 'could not identify exactly one VMnet8 Ethernet NIC and one unique bridged Ethernet NIC'
         return 1
     fi
-    backup_netplan
+    if ! backup_netplan; then
+        report FAIL network 'could not create an isolated Netplan backup for the transaction'
+        return 1
+    fi
     write_netplan_config || { report FAIL network 'could not write the staged Netplan configuration'; rollback_network_now "$NETWORK_TRANSACTION_ID"; return 1; }
     schedule_network_rollback || { report FAIL network 'could not schedule automatic Netplan rollback'; rollback_network_now "$NETWORK_TRANSACTION_ID"; return 1; }
     if ! netplan generate || ! netplan apply; then
