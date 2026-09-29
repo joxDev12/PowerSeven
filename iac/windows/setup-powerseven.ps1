@@ -781,6 +781,93 @@ function Remove-DC02AdminRoute {
     Write-Result 'WARN' 'dc02-route' 'new administrative VPN route removed during rollback'
 }
 
+function Get-FirewallAddressIdentity {
+    param([string]$Address)
+    $token = $Address.Trim()
+    if ($token -match '^(?i:Any|LocalSubnet|DNS|DHCP|WINS|DefaultGateway|Internet|Intranet|IntranetRemoteAccess|PlayToDevice|CaptivePortal)([46])?$') {
+        return "keyword:$($token.ToLowerInvariant())"
+    }
+
+    $parts = @([regex]::Split($token, '-', 3))
+    if ($parts.Count -eq 2) {
+        $start = $null
+        $end = $null
+        if (-not [System.Net.IPAddress]::TryParse($parts[0].Trim(), [ref]$start) -or
+            -not [System.Net.IPAddress]::TryParse($parts[1].Trim(), [ref]$end)) { throw "Invalid firewall address range: $token" }
+        $startBytes = $start.GetAddressBytes()
+        $endBytes = $end.GetAddressBytes()
+        if ($startBytes.Length -ne $endBytes.Length) { throw "Mixed-family firewall address range: $token" }
+        $startKey = [System.BitConverter]::ToString($startBytes).Replace('-', '').ToLowerInvariant()
+        $endKey = [System.BitConverter]::ToString($endBytes).Replace('-', '').ToLowerInvariant()
+        if ([string]::CompareOrdinal($startKey, $endKey) -gt 0) { throw "Reversed firewall address range: $token" }
+        return "range$($startBytes.Length):$startKey-$endKey"
+    }
+
+    $subnet = @([regex]::Split($token, '/', 3))
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($subnet[0], [ref]$ip)) { throw "Invalid firewall address: $token" }
+    $bytes = $ip.GetAddressBytes()
+    $prefix = $bytes.Length * 8
+    if ($subnet.Count -eq 2) {
+        if ($subnet[1] -match '^\d+$') {
+            if (-not [int]::TryParse($subnet[1], [ref]$prefix) -or $prefix -gt ($bytes.Length * 8)) {
+                throw "Invalid firewall network prefix: $token"
+            }
+        } else {
+            $mask = $null
+            if ($bytes.Length -ne 4 -or -not [System.Net.IPAddress]::TryParse($subnet[1], [ref]$mask) -or $mask.GetAddressBytes().Length -ne 4) {
+                throw "Invalid firewall subnet mask: $token"
+            }
+            $prefix = 0
+            $zeroSeen = $false
+            foreach ($maskByte in $mask.GetAddressBytes()) {
+                for ($bit = 7; $bit -ge 0; $bit--) {
+                    if (($maskByte -band (1 -shl $bit)) -ne 0) {
+                        if ($zeroSeen) { throw "Non-contiguous firewall subnet mask: $token" }
+                        $prefix++
+                    } else {
+                        $zeroSeen = $true
+                    }
+                }
+            }
+        }
+    } elseif ($subnet.Count -gt 2) {
+        throw "Invalid firewall subnet: $token"
+    }
+
+    $remaining = $prefix
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        if ($remaining -ge 8) {
+            $remaining -= 8
+        } elseif ($remaining -gt 0) {
+            $maskByte = (255 -shl (8 - $remaining)) -band 255
+            $bytes[$index] = [byte]($bytes[$index] -band $maskByte)
+            $remaining = 0
+        } else {
+            $bytes[$index] = 0
+        }
+    }
+    $networkKey = [System.BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+    return "network$($bytes.Length):$networkKey/$prefix"
+}
+
+function Test-FirewallAddressSet {
+    param([string[]]$Actual, [string[]]$Expected)
+    try {
+        $actualSet = @{}
+        foreach ($address in $Actual) { $actualSet[(Get-FirewallAddressIdentity -Address $address)] = $true }
+        $expectedSet = @{}
+        foreach ($address in $Expected) { $expectedSet[(Get-FirewallAddressIdentity -Address $address)] = $true }
+        if ($actualSet.Count -ne $expectedSet.Count) { return $false }
+        foreach ($identity in $expectedSet.Keys) {
+            if (-not $actualSet.ContainsKey($identity)) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Test-ManagedRdpRule {
     param([string]$Name, [string]$Action, [string[]]$RemoteAddress, [string]$LocalAddress)
     foreach ($store in @('PersistentStore', 'ActiveStore')) {
@@ -790,9 +877,9 @@ function Test-ManagedRdpRule {
         if ($rule.Direction -ne 'Inbound' -or $rule.Action -ne $Action -or $rule.Enabled -ne 'True' -or $rule.Profile -ne 'Any') { return $false }
         $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
         $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-        if ($port.Protocol -ne 'TCP' -or @($port.LocalPort).Count -ne 1 -or [string]$port.LocalPort -ne '3389') { return $false }
-        if (@($address.LocalAddress).Count -ne 1 -or [string]$address.LocalAddress -ne $LocalAddress) { return $false }
-        if ((@($address.RemoteAddress | Sort-Object) -join ',') -ne (@($RemoteAddress | Sort-Object) -join ',')) { return $false }
+        if ([string]$port.Protocol -notin @('TCP', '6') -or @($port.LocalPort).Count -ne 1 -or [string]$port.LocalPort -ne '3389') { return $false }
+        if (-not (Test-FirewallAddressSet -Actual @($address.LocalAddress) -Expected @($LocalAddress))) { return $false }
+        if (-not (Test-FirewallAddressSet -Actual @($address.RemoteAddress) -Expected $RemoteAddress)) { return $false }
     }
     return $true
 }

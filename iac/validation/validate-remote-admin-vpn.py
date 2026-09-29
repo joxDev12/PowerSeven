@@ -206,6 +206,42 @@ def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
         return False
 
 
+def firewall_address_identity(value: str) -> tuple:
+    token = value.strip()
+    if re.fullmatch(r"(?i)(Any|LocalSubnet|DNS|DHCP|WINS|DefaultGateway|Internet|Intranet|IntranetRemoteAccess|PlayToDevice|CaptivePortal)([46])?", token):
+        return ("keyword", token.lower())
+    if "-" in token:
+        start_text, end_text = token.split("-", 1)
+        start, end = ipaddress.ip_address(start_text.strip()), ipaddress.ip_address(end_text.strip())
+        if start.version != end.version or int(start) > int(end):
+            raise ValueError(token)
+        return ("range", start.version, int(start), int(end))
+    if "/" in token:
+        network = ipaddress.ip_network(token, strict=False)
+    else:
+        address = ipaddress.ip_address(token)
+        network = ipaddress.ip_network(f"{address}/{address.max_prefixlen}", strict=False)
+    return ("network", network.version, int(network.network_address), network.prefixlen)
+
+
+def firewall_address_semantics_fixture() -> bool:
+    equivalent_pairs = (
+        ("10.99.0.0/24", "10.99.0.0/255.255.255.0"),
+        ("192.168.214.13", "192.168.214.13/32"),
+        ("2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001/128"),
+        ("::2-feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "0000:0000:0000:0000:0000:0000:0000:0002-feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+    )
+    if not all(firewall_address_identity(left) == firewall_address_identity(right) for left, right in equivalent_pairs):
+        return False
+    if len({firewall_address_identity(value) for value in ("Any", "any")}) != 1:
+        return False
+    try:
+        firewall_address_identity("10.99.0.0/255.0.255.0")
+    except (ValueError, ipaddress.NetmaskValueError):
+        return True
+    return False
+
+
 def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, extra_sessions: int) -> int:
     return protocol_probe_sessions + checkpoint_sessions + extra_sessions
 
@@ -492,6 +528,16 @@ def main() -> int:
         report("PASS", "cp3-rdp-policy", "valid IPv4/IPv6 blocks precede allow; active policy and fail-closed rerun are checked")
     else:
         report("FAIL", "cp3-rdp-policy", "RDP policy may depend on existing rules or leave a broad allow active")
+    if ("function Get-FirewallAddressIdentity" in runner and "function Test-FirewallAddressSet" in runner and
+            "IPAddress]::TryParse" in runner and "GetAddressBytes()" in runner and
+            "@([regex]::Split($token, '-', 3))" in runner and "Non-contiguous firewall subnet mask" in runner and
+            "Get-FirewallAddressIdentity -Address $address" in runner and
+            "Test-FirewallAddressSet -Actual @($address.LocalAddress)" in runner and
+            "Test-FirewallAddressSet -Actual @($address.RemoteAddress)" in runner and
+            firewall_address_semantics_fixture()):
+        report("PASS", "cp3-rdp-normalization", "CIDR/netmask, host, IPv6 and firewall keyword aliases compare semantically")
+    else:
+        report("FAIL", "cp3-rdp-normalization", "firewall address normalization misses an equivalent representation")
     scp_source = "Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))"
     if (scp_source in cp3_runner and
             "$remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name" in cp3_runner and
