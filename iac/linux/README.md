@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `13`; ogni modifica
+- il contratto corrente del bootstrap è la versione `14`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - `--protocol` espone versione e capabilities con output deterministico in un
@@ -92,8 +92,10 @@ Il profilo viene messo in staging protetto per SCP key-only dal runner Windows;
 dopo la
 conferma del trasferimento il file e la chiave privata temporanea vengono
 rimosse da VPS14. Se il peer esiste ma lo staging è perso, il bootstrap rifiuta
-di rigenerare l'identità automaticamente. I client instradano solo
-`192.168.214.0/24`, non Internet.
+di rigenerare l'identità automaticamente. I client instradano la rete privata
+come due route più specifiche, `192.168.214.0/25` e `192.168.214.128/25`, non
+Internet. Queste route vincono su una route locale `/24` via longest-prefix
+match.
 `--admin-endpoint` espone in sola lettura l'IP Bridged corrente e la porta
 UDP/51820 al runner, che sincronizza i profili client nei rerun.
 

@@ -95,7 +95,7 @@ provisiona VM o host automaticamente.
   vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
   configura route persistente DC02, firewall RDP e recupera il client config
   fuori repository.
-- **Persistenza CP2:** il bootstrap contract corrente è `v13`. Dopo `netplan generate`
+- **Persistenza CP2:** il bootstrap contract corrente è `v14`. Dopo `netplan generate`
   verifica i file networkd MAC-matched, ricarica e riconfigura le due NIC; se
   restano unmanaged esegue un singolo restart protetto di systemd-networkd.
   Lo stato `configured` e il file `.network` attivo sono letti da `networkctl status`.
@@ -223,14 +223,13 @@ le password non vengono versionate.
 - **Risultato atteso:** `wg-admin` `.1`, peer scelti al primo Apply e assegnati
   da `.2` in avanti, UDP/51820 soltanto sulla
   Bridged, nessun NAT normale, config client in `C:\ProgramData\PowerSeven\clients`.
-- **Stato:** **PARTIAL LIVE / NOT YET END-TO-END VALIDATED** per VPN admin.
-  I primi Apply hanno installato WireGuard e nftables su VPS14 e trasferito
-  i profili di `jarvis` e `giorgio-laptop` a DC02. L'ultimo si è fermato
-  perché non c'era una regola RDP inbound TCP/3389 già abilitata; la route
-  DC02 è stata rimossa dal rollback. Il runner v13 importa le identità
-  esistenti nell'inventario persistente senza cambiarne chiavi o indirizzi;
-  peer VPS12/VPS13, CA, DNS applicativo e overlay `10.10.10.0/24` restano
-  fasi successive.
+- **Stato:** **CP3 server-side PASS in Apply e Check; test end-to-end dei client
+  in attesa.** I primi Apply hanno installato WireGuard e nftables su VPS14 e
+  trasferito i profili di `jarvis` e `giorgio-laptop` a DC02. Un failure
+  intermedio RDP è stato recuperato dal rollback. Il runner v14 aggiorna i
+  profili alle route divise senza ruotare le identità; dopo l'Apply i profili
+  vanno ridistribuiti e reimportati su Jarvis e portatile. Peer VPS12/VPS13,
+  CA, DNS applicativo e overlay `10.10.10.0/24` restano fasi successive.
 
 ### PHASE 9 — service-control
 

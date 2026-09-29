@@ -12,8 +12,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '13'
+$requiredBootstrapVersion = '14'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
+$script:AdminClientAllowedIPs = '192.168.214.0/25, 192.168.214.128/25'
+$script:LegacyAdminClientAllowedIPs = '192.168.214.0/24'
 
 function Write-Result {
     param(
@@ -927,14 +929,16 @@ function Ensure-DC02RdpFirewall {
 }
 
 function Test-AdminClientConfig {
-    param([string]$Path, [string]$Address, [string]$Endpoint = '')
+    param([string]$Path, [string]$Address, [string]$Endpoint = '', [switch]$AllowLegacyRoutes)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $content = Get-Content -LiteralPath $Path -Raw
     $allowed = [regex]::Matches($content, '(?m)^AllowedIPs = (.+)$')
+    $validRoutes = @($script:AdminClientAllowedIPs)
+    if ($AllowLegacyRoutes) { $validRoutes += $script:LegacyAdminClientAllowedIPs }
     return ($content -match '(?m)^\[Interface\]$' -and
         $content -match ("(?m)^Address = {0}$" -f [regex]::Escape($Address)) -and
         [regex]::Matches($content, '(?m)^\[Peer\]$').Count -eq 1 -and
-        $allowed.Count -eq 1 -and $allowed[0].Groups[1].Value -ceq '192.168.214.0/24' -and
+        $allowed.Count -eq 1 -and $allowed[0].Groups[1].Value -cin $validRoutes -and
         $content -match '(?m)^Endpoint = \S+:51820$' -and
         ($Endpoint -eq '' -or $content -match ("(?m)^Endpoint = {0}$" -f [regex]::Escape($Endpoint))) -and
         $content -match '(?m)^PrivateKey = \S+$')
@@ -1006,15 +1010,17 @@ function Get-RemoteAdminEndpoint {
     return $endpoint
 }
 
-function Update-AdminClientEndpoint {
+function Update-AdminClientProfile {
     param([string]$Path, [string]$Endpoint)
     $content = Get-Content -LiteralPath $Path -Raw
     $endpointMatches = [regex]::Matches($content, '(?m)^Endpoint = \S+:51820$')
-    if ($endpointMatches.Count -ne 1) { throw "Client profile has an invalid endpoint line: $Path" }
-    if ($endpointMatches[0].Value -ceq "Endpoint = $Endpoint") { return }
-    $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.powerseven-endpoint-' + [guid]::NewGuid().ToString('N'))
+    $allowedMatches = [regex]::Matches($content, '(?m)^AllowedIPs = (.+)$')
+    if ($endpointMatches.Count -ne 1 -or $allowedMatches.Count -ne 1) { throw "Client profile has invalid endpoint/AllowedIPs lines: $Path" }
+    $updated = $content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint").Replace($allowedMatches[0].Value, "AllowedIPs = $script:AdminClientAllowedIPs")
+    if ($updated -ceq $content) { return }
+    $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.powerseven-profile-' + [guid]::NewGuid().ToString('N'))
     try {
-        [System.IO.File]::WriteAllText($temporaryPath, $content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint"), [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($temporaryPath, $updated, [System.Text.UTF8Encoding]::new($false))
         Set-RestrictedAcl -Path $temporaryPath -Directory $false
         [System.IO.File]::Replace($temporaryPath, $Path, $null)
         Set-RestrictedAcl -Path $Path -Directory $false
@@ -1022,7 +1028,7 @@ function Update-AdminClientEndpoint {
     finally {
         if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force }
     }
-    Write-Result 'PASS' 'admin-client-endpoint' "updated $(Split-Path -Leaf $Path) to $Endpoint without changing its private key"
+    Write-Result 'PASS' 'admin-client-profile' "updated $(Split-Path -Leaf $Path) endpoint/routes without changing its private key"
 }
 
 function Test-DC02AdminState {
@@ -1572,7 +1578,7 @@ sudo rm -rf "$backup" "$stage"
             $peer.LocalExists = Test-Path -LiteralPath $peer.Path -PathType Leaf
             if ($peer.LocalExists) {
                 Set-RestrictedAcl -Path $peer.Path -Directory $false
-                if (-not (Test-AdminClientConfig -Path $peer.Path -Address $peer.Address)) {
+                if (-not (Test-AdminClientConfig -Path $peer.Path -Address $peer.Address -AllowLegacyRoutes)) {
                     throw "existing $($peer.Name) config is invalid; explicit rotation is required"
                 }
             }
@@ -1592,7 +1598,7 @@ sudo rm -rf "$backup" "$stage"
                     $remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name
                     Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))
                     Set-RestrictedAcl -Path $temporaryClientPath -Directory $false
-                    if (-not (Test-AdminClientConfig -Path $temporaryClientPath -Address $peer.Address)) {
+                    if (-not (Test-AdminClientConfig -Path $temporaryClientPath -Address $peer.Address -AllowLegacyRoutes)) {
                         throw "downloaded $($peer.Name) config failed structural validation"
                     }
                     Move-Item -LiteralPath $temporaryClientPath -Destination $peer.Path
@@ -1606,7 +1612,7 @@ sudo rm -rf "$backup" "$stage"
         }
         $endpoint = Get-RemoteAdminEndpoint -Target $target -SshOptions $keyOnlySshOptions
         foreach ($peer in $adminPeers) {
-            Update-AdminClientEndpoint -Path $peer.Path -Endpoint $endpoint
+            Update-AdminClientProfile -Path $peer.Path -Endpoint $endpoint
             if (-not (Test-AdminClientConfig -Path $peer.Path -Address $peer.Address -Endpoint $endpoint)) {
                 throw "$($peer.Name) config does not match the current VPS14 endpoint"
             }

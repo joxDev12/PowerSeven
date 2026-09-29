@@ -100,7 +100,9 @@ target_local:
       profile_pattern: powerseven-admin-{name}.conf
     endpoint: udp/51820 on VPS14 bridged NIC
     allowed_ips:
-      - 192.168.214.0/24
+      - 192.168.214.0/25
+      - 192.168.214.128/25
+    overlap_handling: two more-specific routes cover the underlay and win over an equal or broader local route
     return_routes:
       dc02:
         destination: 10.99.0.0/24

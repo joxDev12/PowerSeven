@@ -9,11 +9,12 @@ CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
 PEER_NAMES_CSV=''
 declare -a ADMIN_PEERS=()
-readonly POWERSEVEN_BOOTSTRAP_VERSION='13'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='14'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
 readonly UNDERLAY_NETWORK='192.168.214.0/24'
+readonly ADMIN_CLIENT_ROUTES='192.168.214.0/25, 192.168.214.128/25'
 readonly UNDERLAY_ADDRESS='192.168.214.14/24'
 readonly UNDERLAY_GATEWAY='192.168.214.2'
 readonly UNDERLAY_DNS='192.168.214.13'
@@ -1387,7 +1388,7 @@ ensure_admin_client_export() (
         '[Peer]' \
         "PublicKey = $(tr -d '[:space:]' < "$WG_SERVER_PUB")" \
         "Endpoint = ${BRIDGED_ADDRESS%/*}:$WG_PORT" \
-        "AllowedIPs = $UNDERLAY_NETWORK" \
+        "AllowedIPs = $ADMIN_CLIENT_ROUTES" \
         'PersistentKeepalive = 25' > "$temporary_config"
     install -o "$export_uid" -g "$export_gid" -m 600 "$temporary_config" "$peer_export"
     printf '%s\n' "$client_public" > "$peer_state"

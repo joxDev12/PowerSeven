@@ -34,6 +34,25 @@ def network_fixture_is_unambiguous(addresses: dict[str, str | None]) -> bool:
     return len(bridged) == 1
 
 
+def split_tunnel_overlap_fixture(underlay: str, routes: list[str]) -> bool:
+    private = ipaddress.ip_network(underlay)
+    fragments = [ipaddress.ip_network(route) for route in routes]
+    if any(not route.subnet_of(private) or route.prefixlen <= private.prefixlen for route in fragments):
+        return False
+    if list(ipaddress.collapse_addresses(fragments)) != [private]:
+        return False
+    local_route = private
+    for address in (private.network_address, private.network_address + 13,
+                    private.network_address + 14, private.network_address + 127,
+                    private.network_address + 128, private.broadcast_address - 1,
+                    private.broadcast_address):
+        selected = max((route for route in [local_route, *fragments] if address in route), key=lambda route: route.prefixlen)
+        if selected not in fragments:
+            return False
+    return not any(address in route for address in (
+        ipaddress.ip_address("8.8.8.8"), ipaddress.ip_address("1.1.1.1")) for route in fragments)
+
+
 def network_ready_fixture(state: dict[str, bool]) -> bool:
     return all(state[key] for key in ("underlay", "default_route", "bridge_link", "bridge_ipv4", "underlay_dns", "networkd", "persistence")) and not state["bridge_default_route"] and not state["bridge_dns"]
 
@@ -295,10 +314,19 @@ def main() -> int:
         report("PASS", "admin-vpn-addresses", "variable peer pool 10.99.0.2-254 is declared")
     else:
         report("FAIL", "admin-vpn-addresses", "admin VPN address plan is inconsistent")
-    if admin["allowed_ips"] != ["192.168.214.0/24"] or admin["nat"]["default"] is not False:
+    underlay_cidr = networks["target_local"]["underlay"]["cidr"]
+    allowed_ips = ["192.168.214.0/25", "192.168.214.128/25"]
+    allowed_ips_text = ", ".join(allowed_ips)
+    if (admin["allowed_ips"] != allowed_ips or
+            not split_tunnel_overlap_fixture(underlay_cidr, admin["allowed_ips"]) or admin["nat"]["default"] is not False):
         report("FAIL", "routing-policy", "admin VPN must use VMnet8-only split tunnel and no NAT")
     else:
-        report("PASS", "routing-policy", "VMnet8-only split tunnel; Internet stays outside VPN")
+        report("PASS", "routing-policy", "two more-specific VPN routes cover VMnet8, beat Jarvis's /24, and leave Internet outside")
+    if (f"readonly ADMIN_CLIENT_ROUTES='{allowed_ips_text}'" in bootstrap and
+            f"$script:AdminClientAllowedIPs = '{allowed_ips_text}'" in runner):
+        report("PASS", "client-route-contract", "Linux export, Windows migration and inventory share the split-route list")
+    else:
+        report("FAIL", "client-route-contract", "client AllowedIPs differ across inventory, Linux export and Windows migration")
     route = admin["return_routes"]["dc02"]
     if route == {"destination": "10.99.0.0/24", "via": "192.168.214.14"}:
         report("PASS", "dc02-route", "persistent return route target is declared")
@@ -456,7 +484,7 @@ def main() -> int:
             "ADMIN_PEERS" in cp3_body and
             "ensure_admin_client_export" in cp3_body and
             'iifname "$WG_INTERFACE" drop' in bootstrap and
-            '"AllowedIPs = $UNDERLAY_NETWORK"' in bootstrap and
+            '"AllowedIPs = $ADMIN_CLIENT_ROUTES"' in bootstrap and
             "10.10.10.0/24" not in cp3_body and
             "jarvis" not in bootstrap and "giorgio-laptop" not in bootstrap and
             "jarvis" not in runner and "giorgio-laptop" not in runner and
@@ -542,13 +570,15 @@ def main() -> int:
     if (scp_source in cp3_runner and
             "$remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name" in cp3_runner and
             'Invoke-Native $script:Scp ($keyOnlySshOptions + @($target +' not in cp3_runner and
-            cp3_runner.find("Get-RemoteAdminEndpoint") < cp3_runner.find("Update-AdminClientEndpoint") < cp3_runner.find("--cleanup-client") and
+            cp3_runner.find("Get-RemoteAdminEndpoint") < cp3_runner.find("Update-AdminClientProfile") < cp3_runner.find("--cleanup-client") and
             "[System.IO.File]::Replace($temporaryPath, $Path, $null)" in runner and
             '$content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint")' in runner and
+            '.Replace($allowedMatches[0].Value, "AllowedIPs = $script:AdminClientAllowedIPs")' in runner and
+            "if ($AllowLegacyRoutes) { $validRoutes += $script:LegacyAdminClientAllowedIPs }" in runner and
             0 <= bootstrap.find("detect_network_interfaces()") < bootstrap.find("if [[ \"$#\" -eq 1 && \"$1\" == '--admin-endpoint' ]]") and
             "detect_network_interfaces && [[ \"$BRIDGED_ADDRESS\" != 'none' ]]" in bootstrap and
             "Test-AdminClientConfig -Path $path -Address $peer.Address -Endpoint $Endpoint" in runner):
-        report("PASS", "cp3-export-recovery", "SCP gets two paths; staged keys survive failure and reruns atomically refresh only the endpoint")
+        report("PASS", "cp3-export-recovery", "SCP recovery preserves identities; reruns atomically refresh endpoint and split routes")
     else:
         report("FAIL", "cp3-export-recovery", "SCP arguments, staged-key recovery or dynamic endpoint sync is incomplete")
     cp2_runner_match = re.search(r"if \(\$Checkpoint -eq '2' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} elseif \(\$Checkpoint -eq '3' -and \$Apply\))", runner, re.DOTALL)
@@ -585,11 +615,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='13'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='14'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '13'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '14'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")

@@ -86,7 +86,7 @@ VMnet8 statico `.14` e Bridged DHCP senza default route/DNS. Il passaggio `.145`
 → `.14` usa una sessione SSH con timeout bounded, attende il nuovo endpoint e
 riusa la host identity della sessione DHCP tramite `HostKeyAlias`; il token di
 rete viene confermato automaticamente. Il rollback guard resta attivo fino a
-quella conferma. Nel contract v13 la conferma attende fino a 45 s che DHCP Bridged,
+quella conferma. Nel contract v14 la conferma attende fino a 45 s che DHCP Bridged,
 networkd, route, DNS e Netplan persistente siano pronti; il runner concede
 75 s alla chiamata di conferma.
 CP3 configura `wg-admin` su VPS14. Su una nuova installazione chiede numero e
@@ -96,8 +96,12 @@ un rerun non richiede la lista. Il runner aggiunge su DC02 la route persistente
 `10.99.0.0/24 via 192.168.214.14`, installa un blocco RDP fuori VPN prima
 dell'allow VPN e salva ogni profilo in
 `C:\ProgramData\PowerSeven\clients\`. Le chiavi sono indipendenti;
-`AllowedIPs` include solo `192.168.214.0/24`, non Internet. La generazione
-resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
+`AllowedIPs` include solo `192.168.214.0/25, 192.168.214.128/25`, che insieme
+coprono `192.168.214.0/24` e vincono sulla route VMnet8 `/24` locale di Jarvis
+con le regole standard di longest-prefix match. Internet resta fuori dal tunnel.
+A ogni Apply il runner aggiorna sia l'endpoint DHCP sia queste route nei profili
+conservati su DC02; dopo l'Apply vanno ridistribuiti e reimportati sui client.
+La generazione resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
 importa solo il proprio client WireGuard. Codex usa la VPN del computer corrente.
 I file client sono secret locali e non entrano nel repository.
 La Bridged usa DHCP normale. A ogni Apply CP3 il runner legge l'IP corrente di
