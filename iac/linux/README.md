@@ -61,6 +61,8 @@ il bootstrap verifica i due file `.network` generati sotto
 `/run/systemd/network/` tramite MAC, abilita systemd-networkd, esegue
 `networkctl reload` e `reconfigure`; se le NIC restano unmanaged per 3 secondi
 effettua un singolo restart protetto e riprova per altri 3 secondi. Poi la
+verifica richiede `configured` e il file `.network` Netplan attivo per ogni NIC;
+gli stati `configuring`, `unmanaged` e `failed` sono riportati separatamente. La
 validazione completa è bounded a 45 secondi prima del rollback. Il rollback
 riapplica Netplan e ricarica/reconfigura networkd. Dopo
 la conferma il file `/etc/netplan/99-powerseven.yaml` resta persistente,

@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
-readonly POWERSEVEN_BOOTSTRAP_VERSION='9'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='10'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -391,8 +391,34 @@ get_interface_link_state() {
     printf 'state=%s carrier=%s' "$operstate" "$carrier"
 }
 
+networkd_read_link_state() {
+    local interface="$1" mac status state_line
+    NETWORKD_SETUP='unknown'
+    NETWORKD_FILE='none'
+    NETWORKD_EXPECTED='none'
+    mac=$(get_interface_mac "$interface" 2>/dev/null || true)
+    if [[ -n "$mac" ]]; then
+        NETWORKD_EXPECTED=$(networkd_file_for_mac "$mac" 2>/dev/null || true)
+        NETWORKD_EXPECTED=${NETWORKD_EXPECTED:-none}
+    fi
+    status=$(LC_ALL=C SYSTEMD_COLORS=0 SYSTEMD_URLIFY=0 networkctl --no-pager --no-legend status "$interface" 2>/dev/null) || return 0
+    state_line=$(awk '/^[[:space:]]*State:/ { print; exit }' <<< "$status")
+    if [[ "$state_line" =~ \((pending|initialized|configuring|configured|unmanaged|failed|linger)\)[[:space:]]*$ ]]; then
+        NETWORKD_SETUP=${BASH_REMATCH[1]}
+    fi
+    NETWORKD_FILE=$(awk '/^[[:space:]]*Network File:/ {
+        sub(/^[[:space:]]*Network File:[[:space:]]*/, ""); print; exit
+    }' <<< "$status")
+    NETWORKD_FILE=${NETWORKD_FILE:-none}
+}
+
+networkd_interface_is_configured() {
+    networkd_read_link_state "$1"
+    [[ "$NETWORKD_SETUP" == 'configured' && "$NETWORKD_EXPECTED" != 'none' && "$NETWORKD_FILE" == "$NETWORKD_EXPECTED" ]]
+}
+
 report_networkd_diagnostics() {
-    local interface expected_mac actual_mac generated_file service_state
+    local interface expected_mac actual_mac service_state
     service_state=$(systemctl is-active systemd-networkd.service 2>/dev/null || true)
     report WARN networkd-diagnostic "systemd-networkd=$service_state generated=/run/systemd/network"
     systemctl status --no-pager --full systemd-networkd.service 2>&1 | sed -n '1,12p' | while IFS= read -r line; do
@@ -402,8 +428,8 @@ report_networkd_diagnostics() {
         [[ -n "$interface" ]] || continue
         expected_mac=$(get_interface_mac "$interface" 2>/dev/null || true)
         actual_mac=$(cat "/sys/class/net/$interface/address" 2>/dev/null || true)
-        generated_file=$(networkd_file_for_mac "$expected_mac" 2>/dev/null || true)
-        report WARN networkd-diagnostic "interface=$interface expected_mac=$expected_mac actual_mac=$actual_mac generated_file=${generated_file:-none}"
+        networkd_read_link_state "$interface"
+        report WARN networkd-diagnostic "interface=$interface expected_mac=$expected_mac actual_mac=$actual_mac setup=$NETWORKD_SETUP network_file=$NETWORKD_FILE expected_file=$NETWORKD_EXPECTED"
         networkctl status --no-pager "$interface" 2>&1 | sed -n '1,12p' | while IFS= read -r line; do
             report INFO networkd-status "$line"
         done || true
@@ -412,29 +438,29 @@ report_networkd_diagnostics() {
         while IFS= read -r file; do report INFO networkd-generated-file "$file"; done || true
 }
 
-networkd_interfaces_are_managed() {
-    networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 &&
-        networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1
+networkd_interfaces_are_configured() {
+    networkd_interface_is_configured "$VMNET8_IF" &&
+        networkd_interface_is_configured "$BRIDGED_IF"
 }
 
-wait_for_networkd_managed() {
+wait_for_networkd_configured() {
     local timeout="$1" elapsed=0
     while (( elapsed < timeout )); do
-        networkd_interfaces_are_managed && return 0
+        networkd_interfaces_are_configured && return 0
         sleep 1
         elapsed=$((elapsed + 1))
     done
-    networkd_interfaces_are_managed
+    networkd_interfaces_are_configured
 }
 
-wait_for_interface_managed() {
+wait_for_interface_configured() {
     local interface="$1" timeout="$2" elapsed=0
     while (( elapsed < timeout )); do
-        networkctl is-managed "$interface" >/dev/null 2>&1 && return 0
+        networkd_interface_is_configured "$interface" && return 0
         sleep 1
         elapsed=$((elapsed + 1))
     done
-    networkctl is-managed "$interface" >/dev/null 2>&1
+    networkd_interface_is_configured "$interface"
 }
 
 ensure_networkd_takeover() {
@@ -453,7 +479,7 @@ ensure_networkd_takeover() {
     fi
     networkctl reload || reload_failed=1
     networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" || reload_failed=1
-    if (( reload_failed == 0 )) && wait_for_networkd_managed "$phase_timeout"; then
+    if (( reload_failed == 0 )) && wait_for_networkd_configured "$phase_timeout"; then
         report PASS networkd-takeover "reload/reconfigure manages $VMNET8_IF and $BRIDGED_IF"
         return 0
     fi
@@ -461,7 +487,7 @@ ensure_networkd_takeover() {
     if systemctl restart systemd-networkd.service; then
         networkctl reload || true
         networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" || true
-        if wait_for_networkd_managed "$phase_timeout"; then
+        if wait_for_networkd_configured "$phase_timeout"; then
             report PASS networkd-takeover "restart/reconfigure manages $VMNET8_IF and $BRIDGED_IF"
             return 0
         fi
@@ -485,13 +511,13 @@ reload_networkd_after_netplan() {
         return 0
     fi
     if networkctl reload && networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" &&
-       { (( networkd_expected == 0 )) || wait_for_interface_managed "$VMNET8_IF" "$phase_timeout"; }; then
+       { (( networkd_expected == 0 )) || wait_for_interface_configured "$VMNET8_IF" "$phase_timeout"; }; then
         return 0
     fi
     systemctl restart systemd-networkd.service &&
         networkctl reload &&
         networkctl reconfigure "$VMNET8_IF" "$BRIDGED_IF" &&
-        { (( networkd_expected == 0 )) || wait_for_interface_managed "$VMNET8_IF" "$phase_timeout"; }
+        { (( networkd_expected == 0 )) || wait_for_interface_configured "$VMNET8_IF" "$phase_timeout"; }
 }
 
 acquire_network_lock() {
@@ -658,9 +684,9 @@ report_network_state() {
         report FAIL bridged-default-route 'bridged NIC has an unexpected default route'
         return 1
     fi
-    if ! networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 ||
-       ! networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1; then
-        report FAIL networkd "systemd-networkd does not manage $VMNET8_IF and $BRIDGED_IF"
+    if ! networkd_interfaces_are_configured; then
+        report FAIL networkd 'both NICs must be configured by their MAC-matched Netplan network files'
+        report_networkd_diagnostics
         return 1
     fi
     report PASS networkd "managed=$VMNET8_IF,$BRIDGED_IF"
@@ -710,8 +736,12 @@ network_state_missing() {
         missing+='bridged default route present; '
     fi
 
-    networkctl is-managed "$VMNET8_IF" >/dev/null 2>&1 || missing+='underlay networkd unmanaged; '
-    networkctl is-managed "$BRIDGED_IF" >/dev/null 2>&1 || missing+='bridged networkd unmanaged; '
+    if ! networkd_interface_is_configured "$VMNET8_IF"; then
+        missing+="underlay networkd $NETWORKD_SETUP (file=$NETWORKD_FILE expected=$NETWORKD_EXPECTED); "
+    fi
+    if ! networkd_interface_is_configured "$BRIDGED_IF"; then
+        missing+="bridged networkd $NETWORKD_SETUP (file=$NETWORKD_FILE expected=$NETWORKD_EXPECTED); "
+    fi
     systemctl is-active --quiet systemd-networkd.service || missing+='systemd-networkd inactive; '
     systemctl is-enabled --quiet systemd-networkd.service || missing+='systemd-networkd disabled; '
 
@@ -833,6 +863,7 @@ underlay_iface='$VMNET8_IF'
 bridged_iface='$BRIDGED_IF'
 vmnet_mac=\$(cat "/sys/class/net/\$underlay_iface/address")
 networkd_expected=0
+expected_network_file=''
 for netfile in /run/systemd/network/*.network; do
     [[ -f "\$netfile" ]] || continue
     if awk -v wanted="\$vmnet_mac" '
@@ -844,8 +875,20 @@ for netfile in /run/systemd/network/*.network; do
             for (i=1; i<=count; i++) if (tolower(addresses[i]) == tolower(wanted)) found=1
         }
         END { exit !found }
-    ' "\$netfile"; then networkd_expected=1; break; fi
+    ' "\$netfile"; then networkd_expected=1; expected_network_file=\$netfile; break; fi
 done
+rollback_underlay_configured() {
+    local status
+    status=\$(LC_ALL=C SYSTEMD_COLORS=0 SYSTEMD_URLIFY=0 networkctl --no-pager --no-legend status "\$underlay_iface" 2>/dev/null) || return 1
+    awk -v expected="\$expected_network_file" '
+        /^[[:space:]]*State:/ && /\(configured\)[[:space:]]*\$/ { configured=1 }
+        /^[[:space:]]*Network File:/ {
+            sub(/^[[:space:]]*Network File:[[:space:]]*/, "")
+            if (\$0 == expected) file_matches=1
+        }
+        END { exit !(configured && file_matches) }
+    ' <<< "\$status"
+}
 if (( networkd_expected )); then
     systemctl enable systemd-networkd.service
     systemctl is-active --quiet systemd-networkd.service || systemctl start systemd-networkd.service
@@ -858,10 +901,13 @@ if systemctl is-active --quiet systemd-networkd.service; then
     fi
     if (( networkd_expected )); then
         for attempt in 1 2 3 4 5; do
-            networkctl is-managed "\$underlay_iface" >/dev/null 2>&1 && break
+            rollback_underlay_configured && break
             sleep 1
         done
-        networkctl is-managed "\$underlay_iface"
+        if ! rollback_underlay_configured; then
+            networkctl --no-pager status "\$underlay_iface" >&2 || true
+            exit 1
+        fi
     fi
 fi
 rm -f '$running_marker' '$script' '$NETWORK_STATE_DIR/pending-token' '$NETWORK_STATE_DIR/pending-backup'
@@ -956,7 +1002,7 @@ confirm_network() {
         report FAIL network-confirm 'stored network interfaces are missing or invalid; rollback guard remains active'
         return 1
     fi
-    if ! networkd_interfaces_are_managed ||
+    if ! networkd_interfaces_are_configured ||
        ! systemctl is-active --quiet systemd-networkd.service ||
        ! systemctl is-enabled --quiet systemd-networkd.service; then
         if ! ensure_networkd_takeover; then

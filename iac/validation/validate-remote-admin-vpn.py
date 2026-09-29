@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -47,6 +49,59 @@ def networkd_takeover_fixture(*, initially_managed: bool, reload_manages: bool, 
     if restart_manages:
         return True, "restart"
     return False, "rollback"
+
+
+def networkd_status_fixtures(bootstrap: str) -> bool:
+    functions = []
+    for name in ("networkd_read_link_state", "networkd_interface_is_configured"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", bootstrap, re.MULTILINE | re.DOTALL)
+        if not match:
+            return False
+        functions.append(match.group())
+    rollback_match = re.search(r"^rollback_underlay_configured\(\) \{\n.*?^\}", bootstrap, re.MULTILINE | re.DOTALL)
+    if not rollback_match:
+        return False
+    script = """set -euo pipefail
+get_interface_mac() { printf '%s\\n' '00:0c:29:f7:ee:15'; }
+networkd_file_for_mac() { printf '%s\\n' '/run/systemd/network/10-netplan-powerseven-underlay.network'; }
+networkctl() {
+    case "$SCENARIO" in
+        ready) state='routable (configured)'; file='/run/systemd/network/10-netplan-powerseven-underlay.network' ;;
+        configuring) state='routable (configuring)'; file='/run/systemd/network/10-netplan-powerseven-underlay.network' ;;
+        unmanaged) state='off (unmanaged)'; file='n/a' ;;
+        failed) state='degraded (failed)'; file='/run/systemd/network/10-netplan-powerseven-underlay.network' ;;
+        wrong-file) state='routable (configured)'; file='/etc/systemd/network/other.network' ;;
+        unavailable) return 1 ;;
+    esac
+    printf '● 2: ens32\\n Network File: %s\\n State: %s\\n' "$file" "$state"
+}
+"""
+    main_script = script + "\n".join(functions) + """
+if networkd_interface_is_configured ens32; then
+    printf 'ready:%s\\n' "$NETWORKD_SETUP"
+else
+    printf 'pending:%s\\n' "$NETWORKD_SETUP"
+fi
+"""
+    rollback_script = script + """underlay_iface=ens32
+expected_network_file=/run/systemd/network/10-netplan-powerseven-underlay.network
+""" + rollback_match.group().replace("\\$", "$") + """
+if rollback_underlay_configured; then printf 'ready\\n'; else printf 'pending\\n'; fi
+"""
+    expected = {
+        "ready": "ready:configured", "configuring": "pending:configuring",
+        "unmanaged": "pending:unmanaged", "failed": "pending:failed",
+        "wrong-file": "pending:configured", "unavailable": "pending:unknown",
+    }
+    for scenario, output in expected.items():
+        for shell, wanted in ((main_script, output), (rollback_script, "ready" if scenario == "ready" else "pending")):
+            result = subprocess.run(
+                ["bash", "-c", shell], env={**os.environ, "SCENARIO": scenario},
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            if result.returncode != 0 or result.stdout.strip() != wanted:
+                return False
+    return True
 
 
 def host_key_fixture(trusted: str, presented: str) -> bool:
@@ -211,7 +266,7 @@ def main() -> int:
         "chown root:root",
         "chmod 600",
         'mv -f "$temporary" "$file"',
-        "networkctl is-managed",
+        "networkd_interface_is_configured",
         'systemctl stop "$unit.timer" "$unit.service"',
     )
     if (all(actual == expected for actual, expected in persistence_cases) and
@@ -270,6 +325,12 @@ def main() -> int:
         report("PASS", "networkd-takeover-fixtures", "MAC-matched generated files, reload/reconfigure, bounded restart fallback and rollback reload are covered")
     else:
         report("FAIL", "networkd-takeover-fixtures", "networkd ownership takeover or rollback reload sequence is incomplete")
+    if (networkd_status_fixtures(bootstrap) and "networkctl is-managed" not in bootstrap and
+            "networkd_interface_is_configured" in bootstrap and transient_rollback_match and
+            "rollback_underlay_configured" in transient_rollback_match.group("body")):
+        report("PASS", "networkd-status-fixtures", "configured Netplan NICs pass; transient, unmanaged, failed, unavailable and wrong-file states stay pending")
+    else:
+        report("FAIL", "networkd-status-fixtures", "networkctl status parsing or rollback guard is unsafe")
     if (confirm_match and "confirm_started=$SECONDS" in confirm_body and
             "remaining=$((NETWORK_READY_TIMEOUT_SECONDS - elapsed))" in confirm_body and
             "-TimeoutSeconds 75" in runner):
@@ -330,11 +391,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='9'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='10'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '9'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '10'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -359,10 +420,10 @@ def main() -> int:
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 9\ncheckpoints=1,2,3\n", "9", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "9", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "9", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "9", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 10\ncheckpoints=1,2,3\n", "10", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "10", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "10", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "10", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")
