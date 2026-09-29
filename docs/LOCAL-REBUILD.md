@@ -222,13 +222,16 @@ le password non vengono versionate.
   LAN fisica non sovrapposta, secret/key bootstrap già validati.
 - **Risultato atteso:** `wg-admin` `.1`, peer scelti al primo Apply e assegnati
   da `.2` in avanti, UDP/51820 soltanto sulla
-  Bridged, nessun NAT normale, config client in `C:\ProgramData\PowerSeven\clients`.
+  Bridged, nessun NAT normale, config client canonici in
+  `C:\ProgramData\PowerSeven\clients` e copie validate in
+  `Desktop\PowerSeven-Clients` su DC02.
 - **Stato:** **CP3 server-side PASS in Apply e Check; test end-to-end dei client
   in attesa.** I primi Apply hanno installato WireGuard e nftables su VPS14 e
   trasferito i profili di `jarvis` e `giorgio-laptop` a DC02. Un failure
   intermedio RDP è stato recuperato dal rollback. Il runner v14 aggiorna i
-  profili alle route divise senza ruotare le identità; dopo l'Apply i profili
-  vanno ridistribuiti e reimportati su Jarvis e portatile. Peer VPS12/VPS13,
+  profili alle route divise senza ruotare le identità; ogni Apply CP3 riuscito
+  sincronizza le copie di consegna sul Desktop di DC02, da importare sui
+  rispettivi client. Peer VPS12/VPS13,
   CA, DNS applicativo e overlay `10.10.10.0/24` restano fasi successive.
 
 ### PHASE 9 — service-control

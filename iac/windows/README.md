@@ -99,8 +99,12 @@ dell'allow VPN e salva ogni profilo in
 `AllowedIPs` include solo `192.168.214.0/25, 192.168.214.128/25`, che insieme
 coprono `192.168.214.0/24` e vincono sulla route VMnet8 `/24` locale di Jarvis
 con le regole standard di longest-prefix match. Internet resta fuori dal tunnel.
-A ogni Apply il runner aggiorna sia l'endpoint DHCP sia queste route nei profili
-conservati su DC02; dopo l'Apply vanno ridistribuiti e reimportati sui client.
+A ogni Apply il runner aggiorna endpoint DHCP e route nei profili canonici,
+poi li copia insieme a `PowerSeven-DC02.rdp` nella cartella
+`PowerSeven-Clients` sul Desktop fisico dell'utente corrente. Le copie Desktop
+hanno ACL ristrette; ProgramData resta la source of truth e Check non dipende
+dalla cartella Desktop. I file con nomi di peer non più presenti sono segnalati
+e lasciati intatti. Importare ogni profilo solo sul dispositivo corrispondente.
 La generazione resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
 importa solo il proprio client WireGuard. Codex usa la VPN del computer corrente.
 I file client sono secret locali e non entrano nel repository.

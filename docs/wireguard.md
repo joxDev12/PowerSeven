@@ -39,5 +39,8 @@ Internet non attraversa il tunnel.
 Il runner da DC02 aggiunge la route persistente `10.99.0.0/24 via
 192.168.214.14`, blocca RDP da fuori VPN e recupera ogni profilo in
 `C:\ProgramData\PowerSeven\clients\`. Ogni computer usa il proprio file client;
+ogni Apply CP3 riuscito copia i profili validati e `PowerSeven-DC02.rdp` anche
+in `Desktop\PowerSeven-Clients` dell'utente Windows che esegue il runner.
+La cartella ProgramData resta la copia canonica.
 PowerSeven non orchestra WireGuard su Fedora;
 masquerade resta solo fallback, non configurazione normale.

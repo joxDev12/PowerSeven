@@ -34,8 +34,8 @@ conflitto.
 2. Non modificare MAC/order della NIC VMnet8. La Bridged usa DHCP normale:
    il runner legge il suo IP corrente e aggiorna endpoint e route nei profili
    durante ogni Apply CP3, senza rigenerare le chiavi. Se il lease cambia dopo
-   che i profili sono stati importati, rieseguire Apply e ridistribuire i
-   profili aggiornati ai rispettivi computer.
+   che i profili sono stati importati, rieseguire Apply e importare sui client
+   le copie aggiornate da `Desktop\PowerSeven-Clients` su DC02.
 3. Verificare che la rete fisica a cui è collegata la Bridged di VPS14 non usi
    `192.168.214.0/24` e che il Wi-Fi non abbia client isolation tra laptop e VM.
 
@@ -78,8 +78,9 @@ e `wg-admin.conf` associano `jarvis` a `.2` e `giorgio-laptop` a `.3`.
 I profili già esportati su DC02 vengono riutilizzati senza ruotare le chiavi.
 Il runner v14 accetta il vecchio `AllowedIPs = 192.168.214.0/24` durante la
 migrazione e aggiorna atomicamente il profilo alle due route `/25`; le chiavi
-restano invariate. Dopo il rerun, copiare nuovamente ciascun profilo sul
-computer corrispondente e reimportarlo.
+restano invariate. L'Apply aggiorna anche le copie di consegna sul Desktop
+dell'utente che esegue il runner; importare ogni profilo solo sul dispositivo
+corrispondente.
 
 Il runner crea/verifica su DC02 la route verso `10.99.0.0/24`, installa prima
 regole RDP distinte per bloccare TCP/3389 da fuori VPN su IPv4 e IPv6, poi
@@ -94,15 +95,25 @@ C:\ProgramData\PowerSeven\clients\powerseven-admin-{nome}.conf
 C:\ProgramData\PowerSeven\clients\PowerSeven-DC02.rdp
 ```
 
+Questa directory in `ProgramData` resta la copia canonica per Apply, Check e
+conservazione delle identità. Dopo la validazione finale di CP3, Apply copia
+i profili peer attivi e l'RDP in `PowerSeven-Clients` sul Desktop fisico
+dell'utente Windows corrente, risolto tramite la cartella speciale di .NET.
+Le copie ricevono ACL ristrette e vengono validate dopo la scrittura; Check
+non dipende dal Desktop. Ogni rerun aggiorna solo i nomi attesi dal peer
+inventory. Profili di peer non più presenti vengono segnalati e lasciati
+intatti, così PowerSeven non cancella file dell'utente.
+
 Le private key distinte non vengono stampate o versionate. VPS14 conserva solo
 le public key dopo l'export; dopo ogni SCP validato il runner elimina lo
 staging del peer.
 Se un peer esiste ma il config locale è perso, il rerun fallisce senza
 rigenerare identità: serve una
 rotazione esplicita.
-Conservare i profili protetti su DC02 e copiare ciascuno solo sul proprio
-computer. Un rerun riusa le identità; se si interrompe prima della pulizia,
-lo staging residuo permette di recuperare il profilo mancante.
+Le copie sul Desktop sono pronte per l'importazione: installare ogni profilo
+solo sul dispositivo che porta il nome del peer. Un rerun riusa le identità;
+se si interrompe prima della pulizia, lo staging residuo permette di
+recuperare il profilo mancante.
 
 ## Ripresa del test LIVE
 
@@ -123,9 +134,9 @@ lo staging residuo permette di recuperare il profilo mancante.
    private key. Su DC02 confermare route attiva e persistente e che le regole
    RDP gestite blocchino le sorgenti fuori `10.99.0.0/24` e consentano
    la VPN.
-4. Copiare il profilo `jarvis` su Jarvis e `giorgio-laptop` sul portatile in
-   modo protetto. Importare ogni profilo sul computer corrispondente; i due
-   computer hanno chiavi private distinte. Entrambe le metà `/25` devono
+4. Recuperare le copie da `Desktop\PowerSeven-Clients` e importare ogni
+   profilo solo sul dispositivo corrispondente. I due computer hanno chiavi
+   private distinte. Entrambe le metà `/25` devono
    instradarsi nel tunnel anche su Jarvis, dove VMnet8 ha una route `/24`.
    Nessun profilo è destinato a Codex.
 

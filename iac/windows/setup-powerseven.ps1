@@ -1090,12 +1090,118 @@ function Test-DC02AdminState {
     return $ready
 }
 
+function Test-LocalRdpFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $expected = "full address:s:192.168.214.13`r`nusername:s:LAB\Administrator`r`n"
+    return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII) -ceq $expected)
+}
+
 function New-LocalRdpFile {
     param([string]$Directory)
     $path = Join-Path $Directory 'PowerSeven-DC02.rdp'
     [System.IO.File]::WriteAllText($path, "full address:s:192.168.214.13`r`nusername:s:LAB\Administrator`r`n", [System.Text.Encoding]::ASCII)
     Set-RestrictedAcl -Path $path -Directory $false
+    if (-not (Test-LocalRdpFile -Path $path)) { throw 'Generated DC02 RDP profile failed validation' }
     return $path
+}
+
+function Copy-AdminDeliveryFile {
+    param([string]$Source, [string]$Destination, [string]$Address = '', [string]$Endpoint = '')
+
+    if (-not [System.IO.File]::Exists($Source)) { throw "Canonical delivery source is missing: $Source" }
+    if ([string]::Equals([System.IO.Path]::GetFullPath($Source), [System.IO.Path]::GetFullPath($Destination), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Desktop delivery path resolves to the canonical source; refusing to overwrite it'
+    }
+    if ($Address) {
+        if (-not (Test-AdminClientConfig -Path $Source -Address $Address -Endpoint $Endpoint)) { throw "Canonical client profile failed validation: $Source" }
+    } elseif (-not (Test-LocalRdpFile -Path $Source)) {
+        throw "Canonical RDP profile failed validation: $Source"
+    }
+
+    $destinationDirectory = Split-Path -Parent $Destination
+    $temporaryPath = Join-Path $destinationDirectory ('.powerseven-delivery-' + [guid]::NewGuid().ToString('N'))
+    try {
+        $stream = [System.IO.File]::Create($temporaryPath)
+        $stream.Dispose()
+        Set-RestrictedAcl -Path $temporaryPath -Directory $false
+        [System.IO.File]::WriteAllBytes($temporaryPath, [System.IO.File]::ReadAllBytes($Source))
+        Set-RestrictedAcl -Path $temporaryPath -Directory $false
+        if ($Address) {
+            if (-not (Test-AdminClientConfig -Path $temporaryPath -Address $Address -Endpoint $Endpoint)) { throw "Staged client delivery copy failed validation: $Destination" }
+        } elseif (-not (Test-LocalRdpFile -Path $temporaryPath)) {
+            throw "Staged RDP delivery copy failed validation: $Destination"
+        }
+
+        if (Test-Path -LiteralPath $Destination) {
+            $existing = Get-Item -LiteralPath $Destination -Force
+            if ($existing.PSIsContainer -or (($existing.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                throw "Refusing to replace a non-file or reparse-point Desktop item: $Destination"
+            }
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction Stop
+        }
+        [System.IO.File]::Move($temporaryPath, $Destination)
+        Set-RestrictedAcl -Path $Destination -Directory $false
+        if ($Address) {
+            if (-not (Test-AdminClientConfig -Path $Destination -Address $Address -Endpoint $Endpoint)) { throw "Desktop client delivery copy failed validation: $Destination" }
+        } elseif (-not (Test-LocalRdpFile -Path $Destination)) {
+            throw "Desktop RDP delivery copy failed validation: $Destination"
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Export-AdminArtifactsToDesktop {
+    param([string]$ClientDirectory, [string]$RdpPath, [array]$Peers, [string]$Endpoint)
+
+    $desktopDirectory = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::DesktopDirectory)
+    if ([string]::IsNullOrWhiteSpace($desktopDirectory) -or -not (Test-Path -LiteralPath $desktopDirectory -PathType Container)) {
+        throw 'The current Windows user Desktop path is unavailable'
+    }
+    $deliveryDirectory = Join-Path $desktopDirectory 'PowerSeven-Clients'
+    $trimChars = [char[]]@([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $canonicalRoot = [System.IO.Path]::GetFullPath($ClientDirectory).TrimEnd($trimChars) + [System.IO.Path]::DirectorySeparatorChar
+    $deliveryRoot = [System.IO.Path]::GetFullPath($deliveryDirectory).TrimEnd($trimChars) + [System.IO.Path]::DirectorySeparatorChar
+    if ($deliveryRoot.StartsWith($canonicalRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The current user Desktop resolves inside the canonical client directory; refusing delivery'
+    }
+
+    if (Test-Path -LiteralPath $deliveryDirectory) {
+        $directoryItem = Get-Item -LiteralPath $deliveryDirectory -Force
+        if (-not $directoryItem.PSIsContainer -or (($directoryItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)) {
+            throw "PowerSeven Desktop delivery path is not a regular directory: $deliveryDirectory"
+        }
+    } else {
+        New-Item -ItemType Directory -Path $deliveryDirectory -ErrorAction Stop | Out-Null
+        Set-RestrictedAcl -Path $deliveryDirectory -Directory $true
+    }
+
+    $expectedFiles = @()
+    foreach ($peer in $Peers) {
+        $fileName = 'powerseven-admin-{0}.conf' -f $peer.Name
+        $source = Join-Path $ClientDirectory $fileName
+        if (-not [string]::Equals([System.IO.Path]::GetFullPath($peer.Path), [System.IO.Path]::GetFullPath($source), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Peer profile is outside the canonical client directory: $($peer.Name)"
+        }
+        $destination = Join-Path $deliveryDirectory $fileName
+        Copy-AdminDeliveryFile -Source $source -Destination $destination -Address $peer.Address -Endpoint $Endpoint
+        $expectedFiles += $fileName
+    }
+
+    $canonicalRdpPath = Join-Path $ClientDirectory 'PowerSeven-DC02.rdp'
+    if (-not [string]::Equals([System.IO.Path]::GetFullPath($RdpPath), [System.IO.Path]::GetFullPath($canonicalRdpPath), [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'RDP delivery source is outside the canonical client directory'
+    }
+    Copy-AdminDeliveryFile -Source $canonicalRdpPath -Destination (Join-Path $deliveryDirectory 'PowerSeven-DC02.rdp')
+
+    $staleProfiles = @(Get-ChildItem -LiteralPath $deliveryDirectory -Filter 'powerseven-admin-*.conf' -File -ErrorAction Stop |
+        Where-Object { $expectedFiles -notcontains $_.Name })
+    foreach ($staleProfile in $staleProfiles) {
+        Write-Result 'WARN' 'desktop-stale-profile' "left untouched because it is not in the current peer inventory: $($staleProfile.Name)"
+    }
+    Write-Result 'PASS' 'desktop-export' ("{0} validated delivery files copied to {1}; canonical files remain in {2}" -f ($Peers.Count + 1), $deliveryDirectory, $ClientDirectory)
 }
 
 $selectedModes = 0
@@ -1664,7 +1770,14 @@ sudo rm -rf "$backup" "$stage"
         $localRouteState = Ensure-DC02AdminRoute
         Ensure-DC02RdpFirewall
         if (-not (Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers)) { throw 'DC02 administrative VPN state failed final validation' }
+        $localRouteState.Added = $false
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'
+        try {
+            Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory -RdpPath $rdpPath -Peers $adminPeers -Endpoint $endpoint
+        }
+        catch {
+            throw "CP3 network state passed and canonical files remain in '$clientDirectory', but Desktop delivery failed; rerun Apply to retry: $($_.Exception.Message)"
+        }
     } else {
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
         Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($remoteCheckpointArguments -join ' '))

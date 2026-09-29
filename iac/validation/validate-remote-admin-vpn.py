@@ -270,6 +270,53 @@ def admin_profile_update_fixture(runner: str) -> bool:
         return target.read_bytes() == original_bytes
 
 
+def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
+    copy_match = re.search(
+        r"function Copy-AdminDeliveryFile \{(?P<body>.*?)(?=\n\}\n\nfunction Export-AdminArtifactsToDesktop)",
+        runner,
+        re.DOTALL,
+    )
+    export_match = re.search(
+        r"function Export-AdminArtifactsToDesktop \{(?P<body>.*?)(?=\n\}\n\n\$selectedModes)",
+        runner,
+        re.DOTALL,
+    )
+    copy_body = copy_match.group("body") if copy_match else ""
+    export_body = export_match.group("body") if export_match else ""
+    local_rdp = re.search(r"function Test-LocalRdpFile \{(?P<body>.*?)(?=\n\}\n\nfunction New-LocalRdpFile)", runner, re.DOTALL)
+    apply_order = [cp3_apply.find(token) for token in (
+        "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers",
+        "$localRouteState.Added = $false",
+        "Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory",
+    )]
+    if not (
+        copy_match and export_match and local_rdp and runner.count("Export-AdminArtifactsToDesktop") == 2 and
+        "[System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::DesktopDirectory)" in export_body and
+        "Join-Path $desktopDirectory 'PowerSeven-Clients'" in export_body and
+        "C:\\Users\\Administrator\\Desktop" not in runner and
+        "'.powerseven-delivery-'" in copy_body and
+        "GetFullPath($Source), [System.IO.Path]::GetFullPath($Destination)" in copy_body and
+        "WriteAllBytes($temporaryPath, [System.IO.File]::ReadAllBytes($Source))" in copy_body and
+        "WriteAllBytes($Source" not in copy_body and
+        "ReadAllBytes($Source)" in copy_body and
+        "ReparsePoint" in copy_body and
+        copy_body.find("Set-RestrictedAcl -Path $temporaryPath") < copy_body.find("WriteAllBytes($temporaryPath") < copy_body.find("File]::Move($temporaryPath, $Destination)") < copy_body.find("Set-RestrictedAcl -Path $Destination") and
+        "Test-AdminClientConfig -Path $temporaryPath" in copy_body and
+        "Test-AdminClientConfig -Path $Destination" in copy_body and
+        "Test-LocalRdpFile -Path $temporaryPath" in copy_body and
+        "Test-LocalRdpFile -Path $Destination" in copy_body and
+        "'powerseven-admin-{0}.conf' -f $peer.Name" in export_body and
+        "Join-Path $ClientDirectory $fileName" in export_body and
+        "PowerSeven-DC02.rdp" in export_body and
+        "left untouched because it is not in the current peer inventory" in export_body and
+        "Remove-Item -LiteralPath $staleProfile" not in export_body and
+        apply_order == sorted(apply_order) and min(apply_order) >= 0 and
+        cp3_apply.count("Export-AdminArtifactsToDesktop") == 1
+    ):
+        return False
+    return True
+
+
 def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
     try:
         ranges = []
@@ -639,6 +686,11 @@ def main() -> int:
         report("PASS", "cp3-runner-order", "VPN and profiles precede DC02 changes; Check covers both route stores and RDP scope")
     else:
         report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
+    desktop_delivery_ok = desktop_delivery_fixture(runner, cp3_runner)
+    if desktop_delivery_ok:
+        report("PASS", "cp3-desktop-delivery", "validated canonical files sync to the current user's Desktop with restricted ACLs; Check and stale files are independent")
+    else:
+        report("FAIL", "cp3-desktop-delivery", "Desktop delivery is missing, unsafe, hardcoded or coupled to Check/canonical state")
     rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)", runner, re.DOTALL)
     rdp_body = rdp_match.group("body") if rdp_match else ""
     block4 = rdp_body.find("New-NetFirewallRule -Name $blockIPv4Name")
