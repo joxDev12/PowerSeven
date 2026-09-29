@@ -1177,24 +1177,45 @@ function Test-DC02AdminState {
     return $ready
 }
 
+function Get-CurrentRdpIdentity {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($null -eq $identity.User -or -not $identity.IsAuthenticated -or $identity.IsSystem) {
+        throw 'RDP profile requires an authenticated, non-system Windows identity'
+    }
+    $logonName = [string]$identity.Name
+    $separator = $logonName.IndexOf('\')
+    if ($separator -le 0 -or $separator -ne $logonName.LastIndexOf('\') -or $separator -eq ($logonName.Length - 1)) {
+        throw "Current Windows identity is not a domain-qualified logon name: $logonName"
+    }
+    return @{
+        Domain = $logonName.Substring(0, $separator)
+        Username = $logonName.Substring($separator + 1)
+    }
+}
+
+function Get-LocalRdpProfileContent {
+    param([hashtable]$Identity)
+    return ("full address:s:192.168.214.13`r`nusername:s:{0}`r`ndomain:s:{1}`r`n" -f $Identity.Username, $Identity.Domain)
+}
+
 function Test-LocalRdpFile {
-    param([string]$Path)
+    param([string]$Path, [hashtable]$Identity)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
-    $expected = "full address:s:192.168.214.13`r`nusername:s:LAB\Administrator`r`n"
+    $expected = Get-LocalRdpProfileContent -Identity $Identity
     return ([System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII) -ceq $expected)
 }
 
 function New-LocalRdpFile {
-    param([string]$Directory)
+    param([string]$Directory, [hashtable]$Identity)
     $path = Join-Path $Directory 'PowerSeven-DC02.rdp'
-    [System.IO.File]::WriteAllText($path, "full address:s:192.168.214.13`r`nusername:s:LAB\Administrator`r`n", [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllText($path, (Get-LocalRdpProfileContent -Identity $Identity), [System.Text.Encoding]::ASCII)
     Set-RestrictedAcl -Path $path -Directory $false
-    if (-not (Test-LocalRdpFile -Path $path)) { throw 'Generated DC02 RDP profile failed validation' }
+    if (-not (Test-LocalRdpFile -Path $path -Identity $Identity)) { throw 'Generated DC02 RDP profile failed validation' }
     return $path
 }
 
 function Copy-AdminDeliveryFile {
-    param([string]$Source, [string]$Destination, [string]$Address = '', [string]$Endpoint = '')
+    param([string]$Source, [string]$Destination, [string]$Address = '', [string]$Endpoint = '', [hashtable]$RdpIdentity)
 
     if (-not [System.IO.File]::Exists($Source)) { throw "Canonical delivery source is missing: $Source" }
     if ([string]::Equals([System.IO.Path]::GetFullPath($Source), [System.IO.Path]::GetFullPath($Destination), [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -1202,7 +1223,7 @@ function Copy-AdminDeliveryFile {
     }
     if ($Address) {
         if (-not (Test-AdminClientConfig -Path $Source -Address $Address -Endpoint $Endpoint)) { throw "Canonical client profile failed validation: $Source" }
-    } elseif (-not (Test-LocalRdpFile -Path $Source)) {
+    } elseif (-not (Test-LocalRdpFile -Path $Source -Identity $RdpIdentity)) {
         throw "Canonical RDP profile failed validation: $Source"
     }
 
@@ -1216,7 +1237,7 @@ function Copy-AdminDeliveryFile {
         Set-RestrictedAcl -Path $temporaryPath -Directory $false
         if ($Address) {
             if (-not (Test-AdminClientConfig -Path $temporaryPath -Address $Address -Endpoint $Endpoint)) { throw "Staged client delivery copy failed validation: $Destination" }
-        } elseif (-not (Test-LocalRdpFile -Path $temporaryPath)) {
+        } elseif (-not (Test-LocalRdpFile -Path $temporaryPath -Identity $RdpIdentity)) {
             throw "Staged RDP delivery copy failed validation: $Destination"
         }
 
@@ -1231,7 +1252,7 @@ function Copy-AdminDeliveryFile {
         Set-RestrictedAcl -Path $Destination -Directory $false
         if ($Address) {
             if (-not (Test-AdminClientConfig -Path $Destination -Address $Address -Endpoint $Endpoint)) { throw "Desktop client delivery copy failed validation: $Destination" }
-        } elseif (-not (Test-LocalRdpFile -Path $Destination)) {
+        } elseif (-not (Test-LocalRdpFile -Path $Destination -Identity $RdpIdentity)) {
             throw "Desktop RDP delivery copy failed validation: $Destination"
         }
     }
@@ -1241,7 +1262,7 @@ function Copy-AdminDeliveryFile {
 }
 
 function Export-AdminArtifactsToDesktop {
-    param([string]$ClientDirectory, [string]$RdpPath, [array]$Peers, [string]$Endpoint)
+    param([string]$ClientDirectory, [string]$RdpPath, [array]$Peers, [string]$Endpoint, [hashtable]$RdpIdentity)
 
     $desktopDirectory = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::DesktopDirectory)
     if ([string]::IsNullOrWhiteSpace($desktopDirectory) -or -not (Test-Path -LiteralPath $desktopDirectory -PathType Container)) {
@@ -1281,7 +1302,7 @@ function Export-AdminArtifactsToDesktop {
     if (-not [string]::Equals([System.IO.Path]::GetFullPath($RdpPath), [System.IO.Path]::GetFullPath($canonicalRdpPath), [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'RDP delivery source is outside the canonical client directory'
     }
-    Copy-AdminDeliveryFile -Source $canonicalRdpPath -Destination (Join-Path $deliveryDirectory 'PowerSeven-DC02.rdp')
+    Copy-AdminDeliveryFile -Source $canonicalRdpPath -Destination (Join-Path $deliveryDirectory 'PowerSeven-DC02.rdp') -RdpIdentity $RdpIdentity
 
     $staleProfiles = @(Get-ChildItem -LiteralPath $deliveryDirectory -Filter 'powerseven-admin-*.conf' -File -ErrorAction Stop |
         Where-Object { $expectedFiles -notcontains $_.Name })
@@ -1679,6 +1700,7 @@ sudo rm -rf "$backup" "$stage"
 
     if ($Checkpoint -eq '3' -and $Apply) {
         Assert-LocalAdministrator
+        $rdpIdentity = Get-CurrentRdpIdentity
         $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
         New-Item -ItemType Directory -Path $clientDirectory -Force | Out-Null
         Set-RestrictedAcl -Path $clientDirectory -Directory $true
@@ -1852,8 +1874,8 @@ sudo rm -rf "$backup" "$stage"
             $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client' -ExtraValue $peer.Name)
             Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $cleanupArguments)
         }
-        $rdpPath = New-LocalRdpFile -Directory $clientDirectory
-        Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
+        $rdpPath = New-LocalRdpFile -Directory $clientDirectory -Identity $rdpIdentity
+        Write-Result 'PASS' 'dc02-rdp' ("RDP profile created for {0}\{1} at {2} without credentials" -f $rdpIdentity.Domain, $rdpIdentity.Username, $rdpPath)
         $localRouteState = Ensure-DC02AdminRoute
         Ensure-DC02RdpFirewall
         Ensure-DC02RdpOperational
@@ -1861,7 +1883,7 @@ sudo rm -rf "$backup" "$stage"
         $localRouteState.Added = $false
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'
         try {
-            Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory -RdpPath $rdpPath -Peers $adminPeers -Endpoint $endpoint
+            Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory -RdpPath $rdpPath -Peers $adminPeers -Endpoint $endpoint -RdpIdentity $rdpIdentity
         }
         catch {
             throw "CP3 network state passed and canonical files remain in '$clientDirectory', but Desktop delivery failed; rerun Apply to retry: $($_.Exception.Message)"

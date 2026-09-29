@@ -303,8 +303,8 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
         copy_body.find("Set-RestrictedAcl -Path $temporaryPath") < copy_body.find("WriteAllBytes($temporaryPath") < copy_body.find("File]::Move($temporaryPath, $Destination)") < copy_body.find("Set-RestrictedAcl -Path $Destination") and
         "Test-AdminClientConfig -Path $temporaryPath" in copy_body and
         "Test-AdminClientConfig -Path $Destination" in copy_body and
-        "Test-LocalRdpFile -Path $temporaryPath" in copy_body and
-        "Test-LocalRdpFile -Path $Destination" in copy_body and
+        "Test-LocalRdpFile -Path $temporaryPath -Identity $RdpIdentity" in copy_body and
+        "Test-LocalRdpFile -Path $Destination -Identity $RdpIdentity" in copy_body and
         "'powerseven-admin-{0}.conf' -f $peer.Name" in export_body and
         "Join-Path $ClientDirectory $fileName" in export_body and
         "PowerSeven-DC02.rdp" in export_body and
@@ -315,6 +315,76 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
     ):
         return False
     return True
+
+
+def rdp_identity_fixture(logon_name: str) -> tuple[str, str] | None:
+    separator = logon_name.find("\\")
+    if separator <= 0 or separator != logon_name.rfind("\\") or separator == len(logon_name) - 1:
+        return None
+    return logon_name[separator + 1 :], logon_name[:separator]
+
+
+def rdp_profile_fixture(logon_name: str) -> str | None:
+    identity = rdp_identity_fixture(logon_name)
+    if identity is None:
+        return None
+    username, domain = identity
+    return f"full address:s:192.168.214.13\r\nusername:s:{username}\r\ndomain:s:{domain}\r\n"
+
+
+def rdp_identity_fixtures(runner: str) -> bool:
+    identity_match = re.search(
+        r"function Get-CurrentRdpIdentity \{(?P<body>.*?)(?=\n\}\n\nfunction Get-LocalRdpProfileContent)",
+        runner,
+        re.DOTALL,
+    )
+    content_match = re.search(
+        r"function Get-LocalRdpProfileContent \{(?P<body>.*?)(?=\n\}\n\nfunction Test-LocalRdpFile)",
+        runner,
+        re.DOTALL,
+    )
+    test_match = re.search(
+        r"function Test-LocalRdpFile \{(?P<body>.*?)(?=\n\}\n\nfunction New-LocalRdpFile)",
+        runner,
+        re.DOTALL,
+    )
+    new_match = re.search(
+        r"function New-LocalRdpFile \{(?P<body>.*?)(?=\n\}\n\nfunction Copy-AdminDeliveryFile)",
+        runner,
+        re.DOTALL,
+    )
+    apply_identity = runner.find("$rdpIdentity = Get-CurrentRdpIdentity")
+    apply_new = runner.find("New-LocalRdpFile -Directory $clientDirectory -Identity $rdpIdentity")
+    apply_export = runner.find("Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory -RdpPath $rdpPath -Peers $adminPeers -Endpoint $endpoint -RdpIdentity $rdpIdentity")
+    identity_body = identity_match.group("body") if identity_match else ""
+    content_body = content_match.group("body") if content_match else ""
+    test_body = test_match.group("body") if test_match else ""
+    new_body = new_match.group("body") if new_match else ""
+    samples = (
+        ("LAB\\Administrator", "full address:s:192.168.214.13\r\nusername:s:Administrator\r\ndomain:s:LAB\r\n"),
+        ("CONTOSO\\ops.admin", "full address:s:192.168.214.13\r\nusername:s:ops.admin\r\ndomain:s:CONTOSO\r\n"),
+        ("bad\\identity\\value", None),
+        ("\\missing-domain", None),
+        ("missing-user\\", None),
+    )
+    fixtures_ok = all(rdp_profile_fixture(value) == expected for value, expected in samples)
+    return bool(
+        identity_match and content_match and test_match and new_match and fixtures_ok and
+        "[System.Security.Principal.WindowsIdentity]::GetCurrent()" in identity_body and
+        "$identity.IsAuthenticated" in identity_body and "$identity.IsSystem" in identity_body and
+        "$logonName.IndexOf('\\')" in identity_body and "$logonName.LastIndexOf('\\')" in identity_body and
+        "Username = $logonName.Substring($separator + 1)" in identity_body and
+        "Domain = $logonName.Substring(0, $separator)" in identity_body and
+        "username:s:{0}" in content_body and "domain:s:{1}" in content_body and
+        "-f $Identity.Username, $Identity.Domain" in content_body and
+        "password" not in content_body.lower() and
+        "Get-LocalRdpProfileContent -Identity $Identity" in test_body and
+        "Get-LocalRdpProfileContent -Identity $Identity" in new_body and
+        "Test-LocalRdpFile -Path $path -Identity $Identity" in new_body and
+        "LAB\\Administrator" not in runner and
+        min(apply_identity, apply_new, apply_export) >= 0 and
+        apply_identity < apply_new < apply_export
+    )
 
 
 def native_output_isolation_fixture(runner: str) -> bool:
@@ -808,6 +878,10 @@ def main() -> int:
         report("PASS", "cp3-desktop-delivery", "validated canonical files sync to the current user's Desktop with restricted ACLs; Check and stale files are independent")
     else:
         report("FAIL", "cp3-desktop-delivery", "Desktop delivery is missing, unsafe, hardcoded or coupled to Check/canonical state")
+    if rdp_identity_fixtures(runner):
+        report("PASS", "cp3-rdp-identity", "RDP username/domain are derived from the current authenticated Windows identity and validated separately")
+    else:
+        report("FAIL", "cp3-rdp-identity", "RDP profile identity is hardcoded, malformed or not carried through Desktop delivery")
     if native_output_isolation_fixture(runner):
         report("PASS", "native-output-isolation", "Invoke-Native displays stdout without leaking it through scalar-return helpers such as New-LocalRdpFile")
     else:

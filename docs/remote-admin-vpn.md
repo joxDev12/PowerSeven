@@ -107,7 +107,9 @@ dell'utente Windows corrente, risolto tramite la cartella speciale di .NET.
 Le copie ricevono ACL ristrette e vengono validate dopo la scrittura; Check
 non dipende dal Desktop. Ogni rerun aggiorna solo i nomi attesi dal peer
 inventory. Profili di peer non più presenti vengono segnalati e lasciati
-intatti, così PowerSeven non cancella file dell'utente.
+intatti, così PowerSeven non cancella file dell'utente. Il file RDP separa i
+campi `username` e `domain` derivandoli dall'identità Windows autenticata che
+esegue Apply; non memorizza password.
 
 Le private key distinte non vengono stampate o versionate. VPS14 conserva solo
 le public key dopo l'export; dopo ogni SCP validato il runner elimina lo
