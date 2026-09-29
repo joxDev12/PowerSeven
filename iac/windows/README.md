@@ -60,6 +60,11 @@ key-only, bootstrap contract `--protocol` e capabilities in una sessione, poi
 esegue il checkpoint read-only in una seconda sessione. Non fa staging, SCP,
 password o mutazioni. Exit code `10` indica remediation necessaria ma
 nessun errore tecnico; un exit code diverso da zero indica un errore reale.
+Se la chiave locale manca o l'accesso key-only non funziona, Check termina
+senza enrollment. Se bootstrap è assente, incompleto, obsoleto o privo della
+capability richiesta, Check termina con `10` e indica `-PrepareBootstrap` o
+`-Apply` per installarlo/migrarlo. Soltanto `-Apply` può fare enrollment
+interattivo della chiave.
 `-PrepareBootstrap` usa il flusso transazionale sudo già validato e si ferma
 dopo la migrazione, senza eseguire il checkpoint.
 

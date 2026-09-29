@@ -656,6 +656,105 @@ def protocol_probe_fixture(exit_code: int, stderr: str, output: str, version: st
     return authenticated, supported
 
 
+def runner_mode_fixture(mode: str, *, key_pair: bool = True, authenticated: bool = True,
+                        bootstrap: str = "current", checkpoint: str = "1") -> tuple[int, list[str]]:
+    events: list[str] = []
+    if mode == "check":
+        if not key_pair:
+            return 1, events
+        events.append("read-only SSH/protocol probe")
+        if not authenticated:
+            return 1, events
+        if bootstrap != "current":
+            return 10, events
+        events.append(f"checkpoint --check --checkpoint {checkpoint}")
+        if checkpoint == "3":
+            events.extend(["peer/endpoint probes", "DC02 read-only state"])
+        return 0, events
+    if mode == "apply":
+        events.append("ensure local key")
+        if not authenticated:
+            events.append("SSH key enrollment")
+        events.append("bootstrap protocol probe")
+        if bootstrap != "current":
+            events.extend(["remote bootstrap staging", "bootstrap migration"])
+        events.append("checkpoint --apply")
+        return 0, events
+    if mode == "prepare-bootstrap":
+        events.append("ensure local key")
+        if not authenticated:
+            return 1, events
+        events.append("bootstrap protocol probe")
+        if bootstrap != "current":
+            events.extend(["remote bootstrap staging", "bootstrap migration"])
+        events.append("checkpoint skipped")
+        return 0, events
+    raise ValueError(f"unknown runner mode: {mode}")
+
+
+def runner_readonly_contract_fixture(runner: str) -> bool:
+    mode_assignment = "$mode = if ($Check) { 'check' } elseif ($Apply) { 'apply' } else { 'prepare-bootstrap' }"
+    action_assignment = "$action = if ($mode -eq 'apply') { '--apply' } else { '--check' }"
+    check_start = runner.find("if ($mode -eq 'check') {\n    Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access")
+    check_end = runner.find("\nWrite-Result 'INFO' 'ssh-key-auth' 'probing existing key-only authentication", check_start)
+    if (mode_assignment not in runner or action_assignment not in runner or min(check_start, check_end) < 0 or
+            not runner.index(mode_assignment) < check_start or not runner.index(action_assignment) < check_start):
+        return False
+    check_body = runner[check_start:check_end]
+    forbidden = re.compile(r"\b(?:Invoke-Native|Invoke-NativeInteractive|Invoke-NativeBounded|Ensure-SshKeyPair|Set-RestrictedAcl|New-Item|Copy-Item|Move-Item|Remove-Item)\b|\$script:Scp|remoteStageDir|authorized_keys|sudoers")
+    if (forbidden.search(check_body) or
+            "Test-ExistingBootstrapInstallation" not in check_body or
+            "Invoke-NativeReadOnly $script:Ssh" not in check_body or
+            "New-RemoteCheckpointArguments -Action '--check' -Checkpoint $Checkpoint" not in check_body or
+            "-Check did not enroll a key" not in check_body or
+            "run -PrepareBootstrap or -Apply" not in check_body or
+            not all(f"exit {code}" in check_body for code in (0, 1, 10))):
+        return False
+
+    for name in ("Test-BootstrapProtocol", "Test-ExistingBootstrapInstallation", "Test-SshKeyAuthentication", "Invoke-SshKeyAuthenticationProbe",
+                 "Get-RemoteAdminPeers", "Get-RemoteAdminEndpoint", "Test-DC02AdminState"):
+        match = re.search(rf"function {name}\b(?P<body>.*?)(?=\nfunction |\n\$selectedModes)", runner, re.DOTALL)
+        if not match or forbidden.search(match.group("body")):
+            return False
+        if name == "Invoke-SshKeyAuthenticationProbe" and "'true'" not in match.group("body"):
+            return False
+
+    key_check = runner.find("if ($mode -eq 'check') {\n    if (-not (Test-SshKeyPair")
+    key_else = runner.find("} else {", key_check)
+    key_ensure = runner.find("Ensure-SshKeyPair", key_check)
+    enroll_call = runner.find("Invoke-NativeInteractive $script:Ssh ($enrollmentSshOptions", check_end)
+    enroll_guard = runner.find("if ($mode -ne 'apply')", check_end)
+    transaction_guard = runner.find("if ($mode -eq 'check') {\n        throw 'Read-only Check cannot enter bootstrap installation", check_end)
+    migration_probe = runner.find("$bootstrapProbe = Test-ExistingBootstrapInstallation", transaction_guard)
+    stage = runner.find("$remoteStageDir = '/tmp/powerseven-stage-'", transaction_guard)
+    prepare = runner.find("if ($mode -eq 'prepare-bootstrap')", transaction_guard)
+    dispatch = runner.find("Write-Result 'INFO' 'checkpoint' (\"mode={0} checkpoint={1}\"", transaction_guard)
+    if not (0 < key_check < key_else < key_ensure and enroll_guard < enroll_call and
+            check_end < transaction_guard < migration_probe < stage < prepare < dispatch):
+        return False
+    checks = [runner_mode_fixture("check", bootstrap="current", checkpoint=cp) for cp in ("1", "2", "3", "4")]
+    fixtures = checks + [
+        runner_mode_fixture("check", bootstrap="absent"),
+        runner_mode_fixture("check", bootstrap="old"),
+        runner_mode_fixture("check", authenticated=False),
+        runner_mode_fixture("check", key_pair=False),
+        runner_mode_fixture("apply", authenticated=False, bootstrap="old"),
+        runner_mode_fixture("prepare-bootstrap", bootstrap="old"),
+    ]
+    expected_checks = [
+        (0, ["read-only SSH/protocol probe", f"checkpoint --check --checkpoint {cp}"] +
+         (["peer/endpoint probes", "DC02 read-only state"] if cp == "3" else []))
+        for cp in ("1", "2", "3", "4")
+    ]
+    expected = expected_checks + [
+        (10, ["read-only SSH/protocol probe"]), (10, ["read-only SSH/protocol probe"]),
+        (1, ["read-only SSH/protocol probe"]), (1, []),
+        (0, ["ensure local key", "SSH key enrollment", "bootstrap protocol probe", "remote bootstrap staging", "bootstrap migration", "checkpoint --apply"]),
+        (0, ["ensure local key", "bootstrap protocol probe", "remote bootstrap staging", "bootstrap migration", "checkpoint skipped"]),
+    ]
+    return fixtures == expected and all("enrollment" not in trace and "staging" not in trace and "migration" not in trace and "--apply" not in trace for _, trace in checks + fixtures[4:8])
+
+
 def bootstrap_contract_fixture(bootstrap: str, runner: str) -> bool:
     version_pattern = r"^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'\r?$"
     capabilities_pattern = r"^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([0-9]+(?:,[0-9]+)*)'\r?$"
@@ -1082,7 +1181,7 @@ def main() -> int:
         report("PASS", "bootstrap-protocol-readonly", "protocol detection is key-only and read-only")
     else:
         report("FAIL", "bootstrap-protocol-readonly", "protocol detection can prompt or mutate the remote host")
-    check_flow_match = re.search(r"if \(\$Check\) \{\n    Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access.*?(?P<body>.*?)\n\}\n\nWrite-Result 'INFO' 'ssh-key-auth'", runner, re.DOTALL)
+    check_flow_match = re.search(r"if \(\$mode -eq 'check'\) \{\n    Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access.*?(?P<body>.*?)\n\}\n\nWrite-Result 'INFO' 'ssh-key-auth'", runner, re.DOTALL)
     check_flow = check_flow_match.group("body") if check_flow_match else ""
     if (check_flow_match and
             "Test-ExistingBootstrapInstallation" in check_flow and
@@ -1103,14 +1202,20 @@ def main() -> int:
     protocol_fixtures = (
         (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, True)),
         (protocol_probe_fixture(0, "", f"powerseven-bootstrap {previous_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, False)),
+        (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\ncheckpoints=1,2,3\n", current_version, current_capabilities, "4"), (True, False)),
+        (protocol_probe_fixture(127, "bootstrap command not found", "", current_version, current_capabilities, "2"), (True, False)),
         (protocol_probe_fixture(2, "usage: old wrapper", "", current_version, current_capabilities, "2"), (True, False)),
         (protocol_probe_fixture(255, "Permission denied (publickey)", "", current_version, current_capabilities, "2"), (False, False)),
         (protocol_probe_fixture(255, "Host key verification failed", "", current_version, current_capabilities, "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
-        report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")
+        report("PASS", "protocol-probe-fixtures", "current, obsolete, missing-capability, absent-command, authentication-failed and host-key-mismatch probes are distinguished")
     else:
         report("FAIL", "protocol-probe-fixtures", "protocol/authentication result fixtures failed")
+    if runner_readonly_contract_fixture(runner):
+        report("PASS", "windows-check-readonly", "CP1-CP4 Check/current, missing/old bootstrap, missing key, Apply enrollment/migration and PrepareBootstrap migration fixtures pass")
+    else:
+        report("FAIL", "windows-check-readonly", "runner Check can reach a mutator, lacks a fail-closed bootstrap/key result, or Apply/PrepareBootstrap mutation paths regressed")
     enrollment_match = re.search(r"if \(-not \$sshKeyAuthentication\) \{(?P<body>.*?)\n\}\nWrite-Result 'PASS' 'ssh-key-auth'", runner, re.DOTALL)
     enrollment_body = enrollment_match.group("body") if enrollment_match else ""
     if enrollment_match and enrollment_body.count("Test-SshKeyAuthentication") == 1 and "$sshKeyAuthentication = $true" in enrollment_body:

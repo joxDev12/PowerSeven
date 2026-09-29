@@ -1375,6 +1375,8 @@ if ($PrepareBootstrap) { $selectedModes++ }
 if ($selectedModes -ne 1) {
     throw 'Choose exactly one mode: -Check, -Apply or -PrepareBootstrap'
 }
+$mode = if ($Check) { 'check' } elseif ($Apply) { 'apply' } else { 'prepare-bootstrap' }
+$action = if ($mode -eq 'apply') { '--apply' } else { '--check' }
 if ($PeerNames.Count -gt 0 -and (-not $Apply -or $Checkpoint -ne '3')) {
     throw '-PeerNames is valid only with -Apply -Checkpoint 3'
 }
@@ -1417,12 +1419,12 @@ if ($UbuntuUsername -notmatch '^[a-z_][a-z0-9_-]*$') {
 
 $script:Ssh = Get-NativeCommand 'ssh.exe'
 $script:SshKeygen = Get-NativeCommand 'ssh-keygen.exe'
-if (-not $Check) {
+if ($mode -ne 'check') {
     $script:Scp = Get-NativeCommand 'scp.exe'
     $script:Icacls = Get-NativeCommand 'icacls.exe'
 }
 
-if ($Check) {
+if ($mode -eq 'check') {
     Write-Result 'PASS' 'runner' 'local SSH and key-validation prerequisites are available'
 } else {
     Write-Result 'PASS' 'runner' 'local SSH, key-generation, copy and ACL prerequisites are available'
@@ -1435,9 +1437,9 @@ $publicKeyPath = '{0}.pub' -f $keyPath
 $target = '{0}@{1}' -f $UbuntuUsername, $Vps14Address
 $targetHostKeyAlias = ''
 
-if ($Check) {
+if ($mode -eq 'check') {
     if (-not (Test-SshKeyPair -KeyPath $keyPath -PublicKeyPath $publicKeyPath)) {
-        Write-Result 'FAIL' 'ssh-key' 'existing PowerSeven SSH key pair is missing or invalid; -Check will not create or repair it'
+        Write-Result 'FAIL' 'ssh-key' 'existing PowerSeven SSH key pair is missing or invalid; -Check will not create it; run -Apply to create and enroll it'
         exit 1
     }
     Write-Result 'PASS' 'ssh-key' 'existing valid PowerSeven key reused'
@@ -1477,7 +1479,7 @@ if (-not [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
     $keyOnlySshOptions += @('-o', "HostKeyAlias=$targetHostKeyAlias")
 }
 
-if ($Check) {
+if ($mode -eq 'check') {
     Write-Result 'INFO' 'ssh-key-auth' 'validating key-only access and bootstrap protocol in one remote probe'
     $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
     if (-not $bootstrapProbe.Authenticated -and $Vps14Address -eq '192.168.214.14' -and [string]::IsNullOrWhiteSpace($targetHostKeyAlias)) {
@@ -1489,13 +1491,13 @@ if ($Check) {
         }
     }
     if (-not $bootstrapProbe.Authenticated) {
-        Write-Result 'FAIL' 'ssh-key-auth' 'key-only SSH authentication or host identity verification failed'
+        Write-Result 'FAIL' 'ssh-key-auth' 'key-only SSH access or host identity could not be verified; -Check did not enroll a key; restore SSH access or use -Apply for interactive enrollment'
         exit 1
     }
     Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
     if (-not $bootstrapProbe.ProtocolSupported) {
-        Write-Result 'WARN' 'bootstrap' ("installed version/capabilities do not support checkpoint {0}" -f $Checkpoint)
-        Write-Result 'MISSING' 'bootstrap' 'migration required; no remote mutation was performed'
+        Write-Result 'WARN' 'bootstrap' ("bootstrap is absent, incomplete, outdated, or lacks checkpoint {0}" -f $Checkpoint)
+        Write-Result 'MISSING' 'bootstrap' 'no remote files were staged or changed; run -PrepareBootstrap or -Apply to install or migrate it'
         exit 10
     }
     Write-Result 'PASS' 'bootstrap' 'version and capabilities support the requested checkpoint'
@@ -1530,8 +1532,8 @@ if (-not $sshKeyAuthentication -and $Vps14Address -eq '192.168.214.14' -and [str
     }
 }
 if (-not $sshKeyAuthentication) {
-    if ($Check -or $PrepareBootstrap) {
-        Write-Result 'FAIL' 'ssh-key-auth' 'key-only authentication failed; read-only/prepare mode will not enroll a key'
+    if ($mode -ne 'apply') {
+        Write-Result 'FAIL' 'ssh-key-auth' ("key-only authentication is required for {0}; this mode will not enroll a key" -f $mode)
         exit 1
     }
     Write-Result 'INFO' 'ssh-enrollment' 'interactive password authentication required'
@@ -1636,6 +1638,9 @@ $remoteRuntimeStageDir = $null
 $localRouteState = $null
 $remoteClientStaged = $false
 try {
+    if ($mode -eq 'check') {
+        throw 'Read-only Check cannot enter bootstrap installation or checkpoint apply; no remote mutation was started'
+    }
     $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
     if ($bootstrapProbe.Ready) {
         Write-Result 'PASS' 'bootstrap' 'existing installation validated'
@@ -1756,7 +1761,7 @@ sudo rm -rf "$backup" "$stage"
         Write-Result 'PASS' 'bootstrap' 'PowerSeven installation migrated and validated'
     }
 
-    if ($PrepareBootstrap) {
+    if ($mode -eq 'prepare-bootstrap') {
         Write-Result 'PASS' 'bootstrap' ("version {0} installed; capabilities {1}" -f $requiredBootstrapVersion, $requiredBootstrapCapabilities)
         Write-Result 'SKIP' 'checkpoint' ("checkpoint {0} apply not requested" -f $Checkpoint)
         exit 0
@@ -1770,7 +1775,6 @@ sudo rm -rf "$backup" "$stage"
         Set-RestrictedAcl -Path $clientDirectory -Directory $true
     }
 
-    $action = if ($Apply) { '--apply' } else { '--check' }
     Write-Result 'INFO' 'checkpoint' ("mode={0} checkpoint={1}" -f $action.TrimStart('-'), $Checkpoint)
 
     if ($Checkpoint -eq '2' -and $Apply) {
