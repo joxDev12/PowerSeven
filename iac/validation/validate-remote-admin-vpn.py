@@ -317,6 +317,38 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
     return True
 
 
+def native_output_isolation_fixture(runner: str) -> bool:
+    native_match = re.search(
+        r"function Invoke-Native \{(?P<body>.*?)(?=\n\}\n\nfunction Invoke-NativeInteractive)",
+        runner,
+        re.DOTALL,
+    )
+    acl_match = re.search(
+        r"function Set-RestrictedAcl \{(?P<body>.*?)(?=\n\}\n\nfunction Test-SshKeyAuthentication)",
+        runner,
+        re.DOTALL,
+    )
+    rdp_match = re.search(
+        r"function New-LocalRdpFile \{(?P<body>.*?)(?=\n\}\n\nfunction Copy-AdminDeliveryFile)",
+        runner,
+        re.DOTALL,
+    )
+    native_body = native_match.group("body") if native_match else ""
+    acl_body = acl_match.group("body") if acl_match else ""
+    rdp_body = rdp_match.group("body") if rdp_match else ""
+    command = "& $FilePath @ArgumentList | Out-Host"
+    return bool(
+        native_match and acl_match and rdp_match and
+        native_body.count("& $FilePath @ArgumentList") == 1 and
+        command in native_body and
+        native_body.find(command) < native_body.find("if ($LASTEXITCODE -ne 0)") and
+        "Invoke-Native $script:Icacls" in acl_body and
+        "Set-RestrictedAcl -Path $path -Directory $false" in rdp_body and
+        rdp_body.find("Set-RestrictedAcl -Path $path") < rdp_body.find("return $path") and
+        rdp_body.count("return $path") == 1
+    )
+
+
 def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
     try:
         ranges = []
@@ -691,6 +723,10 @@ def main() -> int:
         report("PASS", "cp3-desktop-delivery", "validated canonical files sync to the current user's Desktop with restricted ACLs; Check and stale files are independent")
     else:
         report("FAIL", "cp3-desktop-delivery", "Desktop delivery is missing, unsafe, hardcoded or coupled to Check/canonical state")
+    if native_output_isolation_fixture(runner):
+        report("PASS", "native-output-isolation", "Invoke-Native displays stdout without leaking it through scalar-return helpers such as New-LocalRdpFile")
+    else:
+        report("FAIL", "native-output-isolation", "native stdout can contaminate PowerShell helper return values")
     rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)", runner, re.DOTALL)
     rdp_body = rdp_match.group("body") if rdp_match else ""
     block4 = rdp_body.find("New-NetFirewallRule -Name $blockIPv4Name")

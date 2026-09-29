@@ -42,7 +42,7 @@ function Invoke-Native {
         [string[]]$ArgumentList
     )
 
-    & $FilePath @ArgumentList
+    & $FilePath @ArgumentList | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw ('Command failed with exit code {0}: {1}' -f $LASTEXITCODE, $FilePath)
     }
