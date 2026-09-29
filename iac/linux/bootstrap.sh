@@ -9,8 +9,8 @@ CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
 PEER_NAMES_CSV=''
 declare -a ADMIN_PEERS=()
-readonly POWERSEVEN_BOOTSTRAP_VERSION='14'
-readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='15'
+readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3,4'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
 readonly UNDERLAY_NETWORK='192.168.214.0/24'
@@ -34,10 +34,19 @@ readonly NETWORK_READY_TIMEOUT_SECONDS=45
 readonly NETWORK_READY_INTERVAL_SECONDS=2
 readonly NETWORK_ROLLBACK_TIMEOUT_SECONDS=180
 readonly NETWORKD_TAKEOVER_TIMEOUT_SECONDS=6
+readonly DOCKER_CE_VERSION='5:29.8.1-1~ubuntu.24.04~noble'
+readonly DOCKER_COMPOSE_VERSION='5.5.1-1~ubuntu.24.04~noble'
+readonly CONTAINERD_IO_VERSION='2.3.6-1~ubuntu.24.04~noble'
+readonly DOCKER_RUNTIME_DIR='/opt/powerseven/docker'
+readonly DOCKER_FIREWALL_SCRIPT='/usr/local/lib/powerseven/apply-docker-user-firewall.sh'
+readonly DOCKER_FIREWALL_UNIT='powerseven-docker-firewall.service'
+readonly DOCKER_FIREWALL_DROPIN='/etc/systemd/system/docker.service.d/powerseven-firewall.conf'
+RUNTIME_STAGE_ID=''
 
 usage() {
     cat <<'EOF'
 Usage: bootstrap.sh --check|--apply [--checkpoint N] [--peer-list name1,name2]
+       bootstrap.sh --apply --checkpoint 4 --runtime-token TOKEN
 
 Metadata:
   --version       print the bootstrap contract version
@@ -48,8 +57,10 @@ Implemented checkpoints:
   1  detect and expand the mounted root LVM using VG space already available
   2  configure the two-NIC local network with a rollback guard
   3  configure the WireGuard administrative VPN and chosen client peers
+  4  install pinned Docker/Compose runtime and stage the service catalog
 
-Future checkpoints are intentionally not implemented yet.
+Checkpoint 4 does not start applications: image pins, application secrets,
+host databases and service lifecycle configuration remain separate inputs.
 EOF
 }
 
@@ -66,6 +77,9 @@ if [[ "$#" -eq 1 && "$1" == '--protocol' ]]; then
     exit 0
 fi
 report() {
+    if [[ "$1" == 'MISSING' && "$MODE" == 'check' && "$CHECKPOINT" == '4' ]]; then
+        CHECK_NEEDS_APPLY=1
+    fi
     printf '%s: %s: %s\n' "$1" "$2" "$3"
 }
 
@@ -1523,6 +1537,447 @@ vpn_checkpoint() {
     report PASS admin-vpn "WireGuard $WG_INTERFACE configured at $ADMIN_SERVER_ADDRESS; bridged ingress is UDP/$WG_PORT only"
 }
 
+docker_package_version() {
+    local version
+    version=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$1" 2>/dev/null || true)
+    awk '$1 == "ii" { print $2; exit }' <<< "$version"
+}
+
+docker_firewall_rules_are_first() {
+    iptables -w -L FORWARD -v -n --line-numbers 2>/dev/null |
+        awk '$1 == "1" { found=($4 == "DOCKER-USER") } END { exit !found }' || return 1
+    iptables -w -L DOCKER-USER -v -n --line-numbers 2>/dev/null |
+        awk '
+            $1 == "1" { first=($4 == "ACCEPT" && $7 == "*" && $8 == "wg-admin" && $9 == "192.168.214.0/24" && $10 == "10.99.0.0/24" && $0 ~ /ctstate/) }
+            $1 == "2" { second=($4 == "ACCEPT" && $7 == "wg-admin" && $8 == "*" && $9 == "10.99.0.0/24" && $10 == "192.168.214.0/24" && $0 ~ /ctstate/) }
+            END { exit !(first && second) }
+        '
+}
+
+docker_firewall_is_ready() {
+    local systemd_requirements
+    [[ -f "$DOCKER_FIREWALL_SCRIPT" && -f "/etc/systemd/system/$DOCKER_FIREWALL_UNIT" && -f "$DOCKER_FIREWALL_DROPIN" ]] || return 1
+    grep -Fxq 'Before=docker.service' "/etc/systemd/system/$DOCKER_FIREWALL_UNIT" || return 1
+    grep -Fxq 'Requires=powerseven-admin-firewall.service powerseven-docker-firewall.service' "$DOCKER_FIREWALL_DROPIN" || return 1
+    grep -Fxq 'After=powerseven-admin-firewall.service powerseven-docker-firewall.service' "$DOCKER_FIREWALL_DROPIN" || return 1
+    systemd_requirements=$(systemctl show docker.service -p Requires --value 2>/dev/null || true)
+    grep -Fq 'powerseven-docker-firewall.service' <<< "$systemd_requirements" || return 1
+    systemctl is-enabled --quiet "$DOCKER_FIREWALL_UNIT" || return 1
+    systemctl is-active --quiet "$DOCKER_FIREWALL_UNIT" || return 1
+    systemctl is-enabled --quiet docker.service || return 1
+    systemctl is-active --quiet docker.service || return 1
+    docker_firewall_rules_are_first || return 1
+    iptables -w -C FORWARD -j DOCKER-USER >/dev/null 2>&1 || return 1
+    iptables -w -C DOCKER-USER -i "$WG_INTERFACE" -s "$ADMIN_NETWORK" -d "$UNDERLAY_NETWORK" \
+        -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1 || return 1
+    iptables -w -C DOCKER-USER -o "$WG_INTERFACE" -s "$UNDERLAY_NETWORK" -d "$ADMIN_NETWORK" \
+        -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT >/dev/null 2>&1
+}
+
+docker_runtime_files_are_ready() {
+    local manifest="$DOCKER_RUNTIME_DIR/.powerseven-managed-sha256" expected_compose expected_env actual
+    [[ -d "$DOCKER_RUNTIME_DIR" && -f "$DOCKER_RUNTIME_DIR/compose.yml" && -f "$DOCKER_RUNTIME_DIR/.env.example" && -f "$manifest" ]] || return 1
+    [[ "$(stat -c '%U:%G:%a' "$DOCKER_RUNTIME_DIR")" == 'root:root:755' ]] || return 1
+    [[ "$(stat -c '%U:%G:%a' "$DOCKER_RUNTIME_DIR/compose.yml")" == 'root:root:644' ]] || return 1
+    [[ "$(stat -c '%U:%G:%a' "$DOCKER_RUNTIME_DIR/.env.example")" == 'root:root:644' ]] || return 1
+    [[ "$(stat -c '%U:%G:%a' "$manifest")" == 'root:root:644' ]] || return 1
+    expected_compose=$(awk '$1 == "compose.yml" { print $2; exit }' "$manifest")
+    expected_env=$(awk '$1 == ".env.example" { print $2; exit }' "$manifest")
+    actual=$(sha256sum "$DOCKER_RUNTIME_DIR/compose.yml" | awk '{ print $1 }')
+    [[ "$actual" == "$expected_compose" ]] || return 1
+    actual=$(sha256sum "$DOCKER_RUNTIME_DIR/.env.example" | awk '{ print $1 }')
+    [[ "$actual" == "$expected_env" ]]
+}
+
+docker_storage_check() {
+    local docker_root docker_fs containerd_fs free_kib
+    docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)
+    if [[ "$docker_root" == '/var/lib/docker' && -d /var/lib/docker && -d /var/lib/containerd &&
+          "$(stat -c '%U' /var/lib/docker 2>/dev/null || true)" == root &&
+          "$(stat -c '%U' /var/lib/containerd 2>/dev/null || true)" == root ]]; then
+        docker_fs=$(findmnt -no FSTYPE -T /var/lib/docker 2>/dev/null || printf unknown)
+        containerd_fs=$(findmnt -no FSTYPE -T /var/lib/containerd 2>/dev/null || printf unknown)
+        free_kib=$(df -Pk /var/lib/docker | awk 'NR == 2 { print $4 }')
+        report PASS docker-storage "DockerRootDir=$docker_root containerd=/var/lib/containerd filesystem=$docker_fs/$containerd_fs free_kib=${free_kib:-unknown}; data is retained"
+    else
+        report MISSING docker-storage 'expected root-owned /var/lib/docker and /var/lib/containerd on persistent storage'
+        [[ "$MODE" != 'apply' ]] || return 1
+    fi
+}
+
+docker_group_check() {
+    local group members
+    group=$(getent group docker 2>/dev/null || true)
+    if [[ -z "$group" ]]; then
+        report MISSING docker-group 'Docker group is absent'
+        [[ "$MODE" != 'apply' ]] || return 1
+        return 0
+    fi
+    members=$(awk -F: '{ print $4 }' <<< "$group")
+    if [[ -z "$members" ]]; then
+        report PASS docker-group 'group exists with no members; Docker commands remain root-only'
+    else
+        report MISSING docker-group 'Docker group has members; membership grants root-equivalent control and CP4 will not alter it'
+        [[ "$MODE" != 'apply' ]] || return 1
+    fi
+}
+
+docker_app_diagnostics() {
+    local name state health port output
+    local -a networks=(soc-adguard_default soc-cloud_cloudnet soc-forgejo_forgejonet soc-stirling_default soc-scribble_default)
+    local -a volumes=(powerseven_adguard_work powerseven_adguard_config powerseven_nextcloud_config powerseven_nextcloud_data powerseven_nextcloud_redis powerseven_forgejo_data powerseven_stirling_data)
+    local -a containers=(powerseven-adguard powerseven-nextcloud powerseven-nextcloud-redis powerseven-forgejo powerseven-stirling powerseven-scribble-1 powerseven-scribble-2)
+    for name in "${networks[@]}"; do
+        if docker network inspect "$name" >/dev/null 2>&1; then
+            report INFO "docker-network:$name" 'present'
+        else
+            report INFO "docker-network:$name" 'absent; application deployment remains pending'
+        fi
+    done
+    for name in "${volumes[@]}"; do
+        if docker volume inspect "$name" >/dev/null 2>&1; then
+            report INFO "docker-volume:$name" 'present; contents are left untouched'
+        else
+            report INFO "docker-volume:$name" 'absent; application deployment remains pending'
+        fi
+    done
+    for name in "${containers[@]}"; do
+        if state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null); then
+            health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}not-configured{{end}}' "$name" 2>/dev/null || printf 'unknown')
+            report INFO "docker-container:$name" "state=$state health=$health"
+        else
+            report INFO "docker-container:$name" 'absent; CP4 stages the catalog but does not start applications'
+        fi
+    done
+    if output=$(ss -H -lntup 2>/dev/null); then
+        if grep -Eq '[:.]2375([^0-9]|$)|[:.]2376([^0-9]|$)' <<< "$output"; then
+            report MISSING docker-api 'Docker TCP API port 2375/2376 has a listener; remote API must remain disabled'
+        else
+            report PASS docker-api 'no TCP listener on Docker remote API ports 2375/2376'
+        fi
+        for port in 53 3001 3002 8081 8082 8083 8084; do
+            if grep -Eq ":${port}([^0-9]|$)" <<< "$output"; then
+                report INFO "docker-port:$port" 'local listener present'
+            else
+                report INFO "docker-port:$port" 'no local listener; application deployment remains pending'
+            fi
+        done
+    else
+        report MISSING docker-ports 'ss is unavailable; local listeners cannot be checked'
+    fi
+    if timeout 2 bash -c ':</dev/tcp/192.168.214.14/5432' >/dev/null 2>&1; then
+        report INFO external-postgresql '192.168.214.14:5432 accepts TCP'
+    else
+        report INFO external-postgresql '192.168.214.14:5432 is not reachable; host PostgreSQL is a separate milestone'
+    fi
+    if timeout 2 bash -c ':</dev/tcp/192.168.214.14/3306' >/dev/null 2>&1; then
+        report INFO external-mariadb '192.168.214.14:3306 accepts TCP'
+    else
+        report INFO external-mariadb '192.168.214.14:3306 is not reachable; host MariaDB is a separate milestone'
+    fi
+    report INFO application-secrets 'LDAP endpoint/bind identity and application secrets are not modeled; no secret was copied to VPS14'
+    report INFO docker-healthchecks 'the current Compose catalog declares no service healthchecks'
+}
+
+docker_foundation_check() {
+    local os_id os_version os_codename architecture expected actual package name
+    os_id=$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_version=$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_codename=$(awk -F= '$1 == "VERSION_CODENAME" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    architecture=$(dpkg --print-architecture 2>/dev/null || true)
+    if [[ "$os_id" == ubuntu && "$os_version" == '24.04' && "$os_codename" == noble && "$architecture" == amd64 ]]; then
+        report PASS cp4-os "Ubuntu $os_version ($os_codename), $architecture"
+    else
+        report MISSING cp4-os "requires Ubuntu 24.04 Noble amd64; found $os_id $os_version $os_codename $architecture"
+    fi
+    if detect_network_interfaces && verify_network_state; then
+        report PASS cp4-cp2 'CP2 underlay and bridged networking are ready'
+    else
+        report MISSING cp4-cp2 'CP2 network state is not ready'
+    fi
+    if admin_firewall_is_ready && systemctl is-active --quiet "wg-quick@$WG_INTERFACE.service" &&
+       [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || printf 0)" == '1' ]]; then
+        report PASS cp4-cp3 'CP3 WireGuard, loaded nftables policy and forwarding are ready'
+    else
+        report MISSING cp4-cp3 'CP3 state is not ready; CP4 will not change the VPN or its firewall'
+    fi
+    for package in docker-ce docker-ce-cli containerd.io docker-compose-plugin; do
+        case "$package" in
+            docker-ce|docker-ce-cli) expected="$DOCKER_CE_VERSION" ;;
+            containerd.io) expected="$CONTAINERD_IO_VERSION" ;;
+            docker-compose-plugin) expected="$DOCKER_COMPOSE_VERSION" ;;
+        esac
+        actual=$(docker_package_version "$package" || true)
+        if [[ "$actual" == "$expected" ]]; then
+            report PASS "docker-package:$package" "$actual"
+        else
+            report MISSING "docker-package:$package" "expected $expected; found ${actual:-not-installed}"
+        fi
+    done
+    actual=$(docker info --format '{{.ServerVersion}}' 2>/dev/null || true)
+    if systemctl is-enabled --quiet docker.service && systemctl is-active --quiet docker.service && [[ "$actual" == '29.8.1' ]]; then
+        report PASS docker-engine "service is enabled; daemon version=$actual"
+    else
+        report MISSING docker-engine "expected enabled Docker Engine 29.8.1; daemon reports ${actual:-unavailable}"
+    fi
+    actual=$(docker compose version 2>/dev/null || true)
+    if [[ "$actual" == *'v5.5.1'* ]]; then
+        report PASS docker-compose 'pinned 5.5.1 plugin responds'
+    else
+        report MISSING docker-compose "expected Compose 5.5.1; found ${actual:-unavailable}"
+    fi
+    docker_storage_check
+    docker_group_check
+    if docker_firewall_is_ready; then
+        report PASS docker-forwarding 'systemd ordering and DOCKER-USER rules preserve only CP3 VPN-to-underlay forwarding'
+    else
+        report MISSING docker-forwarding 'Docker firewall integration is not ready; CP3 forwarding cannot be assumed'
+    fi
+    if docker_runtime_files_are_ready; then
+        report PASS docker-runtime-files 'root-owned Compose catalog and placeholder template match their managed hashes'
+        if docker compose -f "$DOCKER_RUNTIME_DIR/compose.yml" --env-file "$DOCKER_RUNTIME_DIR/.env.example" config --quiet >/dev/null 2>&1; then
+            report PASS docker-compose-config 'catalog syntax resolves using placeholders only'
+        else
+            report MISSING docker-compose-config 'runtime catalog failed Compose validation'
+        fi
+    else
+        report MISSING docker-runtime-files 'managed runtime files are absent, changed or have unsafe ownership/mode'
+    fi
+    docker_app_diagnostics
+}
+
+install_docker_firewall_integration() (
+    local script_tmp unit_tmp dropin_tmp script_content unit_content dropin_content path
+    script_content=$(cat <<'EOF'
+#!/usr/bin/env bash
+# Managed by PowerSeven CP4
+set -euo pipefail
+ensure_first() {
+    local chain="$1"; shift
+    while iptables -w -C "$chain" "$@" >/dev/null 2>&1; do
+        iptables -w -D "$chain" "$@"
+    done
+    iptables -w -I "$chain" 1 "$@"
+}
+iptables -w -N DOCKER-USER 2>/dev/null || true
+ensure_first DOCKER-USER -i wg-admin -s 10.99.0.0/24 -d 192.168.214.0/24 -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+ensure_first DOCKER-USER -o wg-admin -s 192.168.214.0/24 -d 10.99.0.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+ensure_first FORWARD -j DOCKER-USER
+EOF
+)
+    unit_content=$(cat <<'EOF'
+[Unit]
+Description=PowerSeven Docker forwarding integration
+Requires=powerseven-admin-firewall.service
+After=powerseven-admin-firewall.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/powerseven/apply-docker-user-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)
+    dropin_content=$(cat <<'EOF'
+[Unit]
+Requires=powerseven-admin-firewall.service powerseven-docker-firewall.service
+After=powerseven-admin-firewall.service powerseven-docker-firewall.service
+EOF
+)
+    for path in "$DOCKER_FIREWALL_SCRIPT" "/etc/systemd/system/$DOCKER_FIREWALL_UNIT" "$DOCKER_FIREWALL_DROPIN"; do
+        if [[ -e "$path" ]] && ! grep -Fq '# Managed by PowerSeven CP4' "$path"; then
+            report FAIL docker-forwarding "refusing to overwrite unmanaged file $path"
+            return 1
+        fi
+    done
+    install -d -o root -g root -m 0755 /usr/local/lib/powerseven /etc/systemd/system/docker.service.d
+    script_tmp=$(mktemp /usr/local/lib/powerseven/.docker-firewall.XXXXXX)
+    unit_tmp=$(mktemp "/etc/systemd/system/.$DOCKER_FIREWALL_UNIT.XXXXXX")
+    dropin_tmp=$(mktemp /etc/systemd/system/docker.service.d/.powerseven-firewall.XXXXXX)
+    {
+        printf '%s\n' "$script_content"
+    } > "$script_tmp"
+    {
+        printf '%s\n' '# Managed by PowerSeven CP4'
+        printf '%s\n' "$unit_content"
+    } > "$unit_tmp"
+    {
+        printf '%s\n' '# Managed by PowerSeven CP4'
+        printf '%s\n' "$dropin_content"
+    } > "$dropin_tmp"
+    install -o root -g root -m 0755 "$script_tmp" "$DOCKER_FIREWALL_SCRIPT"
+    install -o root -g root -m 0644 "$unit_tmp" "/etc/systemd/system/$DOCKER_FIREWALL_UNIT"
+    install -o root -g root -m 0644 "$dropin_tmp" "$DOCKER_FIREWALL_DROPIN"
+    rm -f "$script_tmp" "$unit_tmp" "$dropin_tmp"
+    systemctl daemon-reload
+    systemctl enable "$DOCKER_FIREWALL_UNIT"
+    systemctl restart "$DOCKER_FIREWALL_UNIT"
+)
+
+docker_checkpoint() {
+    local os_id os_version os_codename architecture package installed source_tmp key_tmp stage manifest old_hash new_hash new_env_hash actual path
+    local compose_source compose_runtime env_source env_runtime
+    local -a packages=(docker-ce docker-ce-cli containerd.io docker-compose-plugin docker.io docker-compose docker-compose-v2 docker-doc docker-buildx containerd runc podman-docker)
+    if [[ "$MODE" == check ]]; then
+        docker_foundation_check
+        return 0
+    fi
+    [[ "$EUID" -eq 0 ]] || { report FAIL privileges 'CP4 apply requires root'; return 1; }
+    [[ "$RUNTIME_STAGE_ID" =~ ^[a-f0-9]{32}$ ]] || { report FAIL arguments 'CP4 apply requires a valid runtime staging token'; return 1; }
+    stage="/tmp/powerseven-cp4-$RUNTIME_STAGE_ID"
+    compose_source="$stage/compose.yml"
+    env_source="$stage/.env.example"
+    [[ -s "$compose_source" && -s "$env_source" ]] || { report FAIL docker-stage 'Compose catalog or environment template is missing from secure staging'; return 1; }
+    os_id=$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_version=$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_codename=$(awk -F= '$1 == "VERSION_CODENAME" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    architecture=$(dpkg --print-architecture 2>/dev/null || true)
+    if [[ "$os_id" != ubuntu || "$os_version" != '24.04' || "$os_codename" != noble || "$architecture" != amd64 ]]; then
+        report FAIL cp4-os "requires Ubuntu 24.04 Noble amd64; found $os_id $os_version $os_codename $architecture"
+        return 1
+    fi
+    if ! detect_network_interfaces || ! verify_network_state; then
+        report FAIL cp4-cp2 'CP4 requires the validated CP2 static underlay and bridged DHCP state'
+        return 1
+    fi
+    if ! admin_firewall_is_ready || ! systemctl is-active --quiet "wg-quick@$WG_INTERFACE.service" ||
+       [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || printf 0)" != '1' ]]; then
+        report FAIL cp4-cp3 'CP4 requires the validated CP3 firewall, WireGuard interface and IPv4 forwarding'
+        return 1
+    fi
+    if ! require_commands apt-get dpkg-query systemctl ip sha256sum install mktemp stat find timeout ss getent findmnt df; then return 1; fi
+    installed=$(getent group docker 2>/dev/null | awk -F: '{ print $4 }' || true)
+    if [[ -n "$installed" ]]; then
+        report FAIL docker-group 'Docker group already has members; CP4 will not grant, remove or change root-equivalent membership'
+        return 1
+    fi
+    for package in "${packages[@]}"; do
+        installed=$(docker_package_version "$package" || true)
+        case "$package" in
+            docker-ce|docker-ce-cli) [[ -z "$installed" || "$installed" == "$DOCKER_CE_VERSION" ]] || { report FAIL docker-package "existing $package version $installed differs from the pinned target; preserving existing engine/data"; return 1; } ;;
+            containerd.io) [[ -z "$installed" || "$installed" == "$CONTAINERD_IO_VERSION" ]] || { report FAIL docker-package "existing $package version $installed differs from the pinned target; preserving existing engine/data"; return 1; } ;;
+            docker-compose-plugin) [[ -z "$installed" || "$installed" == "$DOCKER_COMPOSE_VERSION" ]] || { report FAIL docker-package "existing $package version $installed differs from the pinned target"; return 1; } ;;
+            *) [[ -z "$installed" ]] || { report FAIL docker-package "conflicting package $package is installed; no package was removed"; return 1; } ;;
+        esac
+    done
+    if [[ -z "$(docker_package_version docker-ce || true)" ]]; then
+        for path in /var/lib/docker /var/lib/containerd; do
+            if [[ -d "$path" ]] && find "$path" -mindepth 1 -print -quit | grep -q .; then
+                report FAIL docker-data "unmanaged persistent data exists at $path; preserving it and refusing a fresh engine install"
+                return 1
+            fi
+        done
+    fi
+    if [[ -e /etc/apt/sources.list.d/docker.sources ]] &&
+       ! grep -Fxq 'URIs: https://download.docker.com/linux/ubuntu' /etc/apt/sources.list.d/docker.sources; then
+        report FAIL docker-repository 'existing Docker APT source is unmanaged; preserving it'
+        return 1
+    fi
+    for path in "$DOCKER_FIREWALL_SCRIPT" "/etc/systemd/system/$DOCKER_FIREWALL_UNIT" "$DOCKER_FIREWALL_DROPIN"; do
+        if [[ -e "$path" ]] && ! grep -Fq '# Managed by PowerSeven CP4' "$path"; then
+            report FAIL docker-forwarding "refusing to overwrite unmanaged file $path"
+            return 1
+        fi
+    done
+    if [[ -e /opt/powerseven && "$(stat -c '%U:%G:%a' /opt/powerseven)" != 'root:root:755' ]]; then
+        report FAIL docker-runtime-files 'existing /opt/powerseven has unmanaged ownership or mode; preserving it'
+        return 1
+    fi
+    manifest="$DOCKER_RUNTIME_DIR/.powerseven-managed-sha256"
+    compose_runtime="$DOCKER_RUNTIME_DIR/compose.yml"
+    env_runtime="$DOCKER_RUNTIME_DIR/.env.example"
+    new_hash=$(sha256sum "$compose_source" | awk '{ print $1 }')
+    new_env_hash=$(sha256sum "$env_source" | awk '{ print $1 }')
+    [[ "$new_hash" =~ ^[a-f0-9]{64}$ && "$new_env_hash" =~ ^[a-f0-9]{64}$ ]] || { report FAIL docker-stage 'runtime payload checksum is invalid'; return 1; }
+    if [[ -e "$compose_runtime" || -e "$env_runtime" || -e "$manifest" ]]; then
+        for path in "$compose_runtime" "$env_runtime" "$manifest"; do
+            if [[ -e "$path" && "$(stat -c '%U:%G:%a' "$path")" != 'root:root:644' ]]; then
+                report FAIL docker-runtime-files "refusing to adopt unmanaged ownership/mode for $path"
+                return 1
+            fi
+        done
+        for pair in "compose.yml:$compose_runtime:$compose_source" ".env.example:$env_runtime:$env_source"; do
+            name=${pair%%:*}; path=${pair#*:}; path=${path%%:*}; source_tmp=${pair##*:}
+            old_hash=''
+            [[ -f "$manifest" ]] && old_hash=$(awk -v name="$name" '$1 == name { print $2; exit }' "$manifest")
+            actual=$(sha256sum "$path" 2>/dev/null | awk '{ print $1 }' || true)
+            installed=$(sha256sum "$source_tmp" | awk '{ print $1 }')
+            if [[ -n "$actual" && "$actual" != "$installed" && ( -z "$old_hash" || "$actual" != "$old_hash" ) ]]; then
+                report FAIL docker-runtime-files "unmanaged or edited file $path was found; preserving it"
+                return 1
+            fi
+            if [[ -e "$manifest" && -z "$old_hash" ]]; then
+                report FAIL docker-runtime-files "managed manifest has no entry for $name; preserving existing state"
+                return 1
+            fi
+        done
+    fi
+    install -d -o root -g root -m 0755 /opt/powerseven "$DOCKER_RUNTIME_DIR"
+    install -o root -g root -m 0644 "$compose_source" "$compose_runtime.new"
+    install -o root -g root -m 0644 "$env_source" "$env_runtime.new"
+    mv -f "$compose_runtime.new" "$compose_runtime"
+    mv -f "$env_runtime.new" "$env_runtime"
+    {
+        sha256sum "$compose_runtime" | awk '{ print "compose.yml", $1 }'
+        sha256sum "$env_runtime" | awk '{ print ".env.example", $1 }'
+    } > "$manifest.new"
+    chmod 0644 "$manifest.new"
+    mv -f "$manifest.new" "$manifest"
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl iptables
+    if ! require_commands curl iptables; then return 1; fi
+    if ! grep -q 'nf_tables' <<< "$(iptables --version 2>/dev/null || true)"; then
+        report FAIL docker-forwarding 'Ubuntu iptables must use its nftables compatibility backend; no firewall backend was changed'
+        return 1
+    fi
+    install -d -o root -g root -m 0755 /etc/apt/keyrings
+    key_tmp=$(mktemp /etc/apt/keyrings/.docker.asc.XXXXXX)
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$key_tmp"
+    if [[ -e /etc/apt/keyrings/docker.asc ]] && ! cmp -s "$key_tmp" /etc/apt/keyrings/docker.asc; then
+        rm -f "$key_tmp"
+        report FAIL docker-repository 'existing Docker APT signing key differs from the official key; preserving it'
+        return 1
+    fi
+    install -o root -g root -m 0644 "$key_tmp" /etc/apt/keyrings/docker.asc
+    rm -f "$key_tmp"
+    source_tmp=$(mktemp /etc/apt/sources.list.d/.docker.sources.XXXXXX)
+    cat > "$source_tmp" <<'EOF'
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: noble
+Components: stable
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+    if [[ -e /etc/apt/sources.list.d/docker.sources ]] && ! cmp -s "$source_tmp" /etc/apt/sources.list.d/docker.sources; then
+        rm -f "$source_tmp"
+        report FAIL docker-repository 'existing Docker APT source differs from the managed Noble source; preserving it'
+        return 1
+    fi
+    install -o root -g root -m 0644 "$source_tmp" /etc/apt/sources.list.d/docker.sources
+    rm -f "$source_tmp"
+    install_docker_firewall_integration
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        "docker-ce=$DOCKER_CE_VERSION" "docker-ce-cli=$DOCKER_CE_VERSION" \
+        "containerd.io=$CONTAINERD_IO_VERSION" "docker-compose-plugin=$DOCKER_COMPOSE_VERSION"
+    systemctl enable --now containerd.service
+    "$DOCKER_FIREWALL_SCRIPT"
+    systemctl enable --now docker.service
+    docker_firewall_is_ready || { report FAIL docker-forwarding 'managed Docker forwarding rules did not remain active'; return 1; }
+    docker_runtime_files_are_ready || { report FAIL docker-runtime-files 'runtime files failed ownership/checksum validation'; return 1; }
+    [[ -z "$(getent group docker 2>/dev/null | awk -F: '{ print $4 }' || true)" ]] || { report FAIL docker-group 'Docker group membership changed during install; no member was removed'; return 1; }
+    [[ "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)" == '/var/lib/docker' ]] || { report FAIL docker-storage 'Docker data root differs from persistent default /var/lib/docker'; return 1; }
+    docker_storage_check
+    docker_group_check
+    docker compose -f "$DOCKER_RUNTIME_DIR/compose.yml" --env-file "$DOCKER_RUNTIME_DIR/.env.example" config --quiet
+    report PASS cp4-foundation 'pinned Docker Engine/Compose, root-owned runtime catalog and CP3 forwarding integration are ready'
+    report INFO cp4-applications 'Compose containers were not started; unresolved image pins, DB/LDAP configuration and secrets require the next application milestone'
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check) MODE='check'; shift ;;
@@ -1552,6 +2007,11 @@ while [[ $# -gt 0 ]]; do
             PEER_NAMES_CSV="$2"
             shift 2
             ;;
+        --runtime-token)
+            [[ $# -ge 2 ]] || { report FAIL arguments '--runtime-token requires a value'; exit 2; }
+            RUNTIME_STAGE_ID="$2"
+            shift 2
+            ;;
         --help|-h) usage; exit 0 ;;
         *) report FAIL arguments "unknown argument: $1"; usage; exit 2 ;;
     esac
@@ -1566,12 +2026,12 @@ if [[ "$MODE" == 'apply' && "$EUID" -ne 0 ]]; then
     report FAIL privileges 'apply requires root; use sudo'
     exit 2
 fi
-if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' ]]; then
-    report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2 and 3 are implemented'
+if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' && "$CHECKPOINT" != '4' ]]; then
+    report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2, 3 and 4 are implemented'
     exit 2
 fi
-if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" ) ]]; then
-    report FAIL arguments 'network/client options are valid only for checkpoints 2 or 3'
+if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" || -n "$RUNTIME_STAGE_ID" ) ]]; then
+    report FAIL arguments 'network/client/runtime options are valid only for their matching checkpoints'
     exit 2
 fi
 if [[ "$CHECKPOINT" == '2' && ( -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" ) ]]; then
@@ -1581,6 +2041,18 @@ fi
 if [[ "$CHECKPOINT" == '3' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" ) ]]; then
     report FAIL arguments 'network transaction options are valid only for checkpoint 2'
     exit 2
+fi
+if [[ "$CHECKPOINT" != '4' && -n "$RUNTIME_STAGE_ID" ]]; then
+    report FAIL arguments '--runtime-token is valid only for checkpoint 4'; exit 2
+fi
+if [[ "$CHECKPOINT" == '4' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" ) ]]; then
+    report FAIL arguments 'network/client options are invalid for checkpoint 4'; exit 2
+fi
+if [[ "$CHECKPOINT" == '4' && "$MODE" == 'apply' && ! "$RUNTIME_STAGE_ID" =~ ^[a-f0-9]{32}$ ]]; then
+    report FAIL arguments 'checkpoint 4 apply requires a 32-character runtime token'; exit 2
+fi
+if [[ "$CHECKPOINT" == '4' && "$MODE" == 'check' && -n "$RUNTIME_STAGE_ID" ]]; then
+    report FAIL arguments 'checkpoint 4 check does not accept a runtime token'; exit 2
 fi
 if [[ -n "$CLEANUP_CLIENT" && "$MODE" != 'apply' ]]; then
     report FAIL arguments '--cleanup-client requires --apply'; exit 2
@@ -1612,5 +2084,9 @@ case "$CHECKPOINT" in
         ;;
     3)
         vpn_checkpoint
+        ;;
+    4)
+        docker_checkpoint
+        if [[ "$MODE" == 'check' ]] && (( CHECK_NEEDS_APPLY )); then exit 1; fi
         ;;
 esac

@@ -13,16 +13,17 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `14`; ogni modifica
+- il contratto corrente del bootstrap è la versione `15`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
-  versione, anche quando le capabilities restano `checkpoints=1,2,3`;
+  versione, anche quando le capabilities restano invariate;
 - `--protocol` espone versione e capabilities con output deterministico in un
   solo probe read-only per il runner Windows;
-- il checkpoint 2 configurerà le due NIC: VMnet8 statico `.14` con gateway
+- il checkpoint 2 configura le due NIC: VMnet8 statico `.14` con gateway
   `.2`/DNS `.13` e NIC bridged DHCP senza default route né DNS;
 - il checkpoint 3 configura il solo VPN amministrativo `wg-admin`
   `10.99.0.0/24`; l'overlay applicativo futuro `10.10.10.0/24` resta separato;
-- dominio, Docker e applicazioni arrivano dopo il bootstrap via Ansible.
+- CP2 e CP3 sono LIVE VALIDATED; il checkpoint 4 prepara Docker e il catalogo
+  Compose senza avviare applicazioni.
 
 Il bootstrap può essere installato da DC02 dal runner
 `iac/windows/setup-powerseven.ps1`: il file Linux viene copiato in un path
@@ -101,6 +102,40 @@ UDP/51820 al runner, che sincronizza i profili client nei rerun.
 
 Il ritorno `10.99.0.0/24 -> 192.168.214.0/24` usa una route persistente su DC02;
 masquerade è solo fallback documentato e non viene configurato dal bootstrap.
+
+## Checkpoint 4 — foundation Docker VPS14
+
+Il runner Windows su DC02 applica CP4 con:
+
+```powershell
+.\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 4
+.\setup-powerseven.ps1 -Check -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 4
+```
+
+Apply accetta solo Ubuntu Server 24.04 Noble amd64 con CP2 e CP3 già PASS,
+installa il set esatto Docker Engine 29.8.1 / Compose 5.5.1 da repository
+Docker, abilita il daemon e deposita `compose.yml` e `.env.example` in
+`/opt/powerseven/docker/`. Non aggiunge l'utente amministrativo al gruppo
+`docker`, che equivale a privilegi root, e non trasferisce `iac/docker/.env`
+né altri secret.
+
+Prima dell'avvio Docker installa una unità systemd e regole `DOCKER-USER` per
+consentire soltanto l'inoltro CP3 `10.99.0.0/24 -> 192.168.214.0/24` e le
+risposte established; il firewall nftables CP3 rimane attivo e viene verificato.
+Apply non rimuove pacchetti o dati Docker esistenti e rifiuta installazioni
+conflittuali o runtime file non gestiti.
+
+Docker documenta il backend `iptables-nft`/`iptables-legacy` e avverte che le
+regole native create con `nft` non sono supportate sullo stesso host. Perciò il
+primo Apply CP4 isolato deve verificare nuovamente route VPN/RDP e che la NIC
+Bridged continui a esporre soltanto WireGuard prima di procedere con le app.
+
+Check è read-only e distingue OS/CP2/CP3, pacchetti e daemon, firewall Docker,
+file/runtime Compose, reti, volumi, container, healthcheck, listener locali e
+database esterni. Le categorie applicative sono diagnostiche: il Compose
+attuale non dichiara healthcheck e le applicazioni restano una milestone
+successiva. Non avviare lo stack finché non sono approvati i tag immagine e
+modellati database, LDAP, secret, porte e avvio service-control.
 
 Renderizzare i placeholder (`<...>`/`REQUIRED_SECRET`) in un workspace escluso
 da Git prima di un futuro provisioning.

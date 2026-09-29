@@ -607,7 +607,7 @@ function New-RemoteCheckpointArguments {
         [string]$Action,
         [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
         [string]$Checkpoint,
-        [ValidateSet('', '--network-token', '--confirm-network', '--cleanup-client', '--peer-list')]
+        [ValidateSet('', '--network-token', '--confirm-network', '--cleanup-client', '--peer-list', '--runtime-token')]
         [string]$ExtraOption = '',
         [string]$ExtraValue = ''
     )
@@ -627,6 +627,11 @@ function New-RemoteCheckpointArguments {
     } elseif ($ExtraOption -eq '--peer-list') {
         if ($Checkpoint -ne '3' -or $Action -ne '--apply' -or $ExtraValue -cnotmatch '^[a-z][a-z0-9_-]{0,31}(,[a-z][a-z0-9_-]{0,31})*$') {
             throw 'Invalid initial admin VPN peer list'
+        }
+        $arguments += @($ExtraOption, $ExtraValue)
+    } elseif ($ExtraOption -eq '--runtime-token') {
+        if ($Checkpoint -ne '4' -or $Action -ne '--apply' -or $ExtraValue -cnotmatch '^[a-f0-9]{32}$') {
+            throw 'Invalid CP4 runtime staging token'
         }
         $arguments += @($ExtraOption, $ExtraValue)
     } elseif (-not [string]::IsNullOrWhiteSpace($ExtraOption)) {
@@ -688,6 +693,10 @@ if [[ "$#" -eq 5 ]]; then
             [[ "$5" =~ ^[a-z][a-z0-9_-]{0,31}(,[a-z][a-z0-9_-]{0,31})*$ ]] || { echo 'invalid admin VPN peer list' >&2; exit 2; }
         else
             echo 'invalid admin VPN peer' >&2; exit 2
+        fi
+    elif [[ "$3" == '4' ]]; then
+        if [[ "$4" != '--runtime-token' || ! "$5" =~ ^[a-f0-9]{32}$ ]]; then
+            echo 'invalid CP4 runtime staging token' >&2; exit 2
         fi
     else
         echo 'invalid extended checkpoint arguments' >&2; exit 2
@@ -1375,6 +1384,13 @@ if (-not (Test-Path -LiteralPath $bootstrapSource -PathType Leaf)) {
     throw "Linux bootstrap source is missing: $bootstrapSource"
 }
 $bootstrapContractSource = Get-Content -LiteralPath $bootstrapSource -Raw
+$dockerComposeSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'docker\compose.yml'
+$dockerEnvironmentTemplate = Join-Path (Split-Path -Parent $PSScriptRoot) 'docker\.env.example'
+if ($Checkpoint -eq '4' -and
+    ((-not (Test-Path -LiteralPath $dockerComposeSource -PathType Leaf)) -or
+     (-not (Test-Path -LiteralPath $dockerEnvironmentTemplate -PathType Leaf)))) {
+    throw 'CP4 requires the tracked Docker Compose catalog and .env.example template'
+}
 $bootstrapVersionMatches = [regex]::Matches($bootstrapContractSource, "(?m)^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'\r?$")
 $bootstrapCapabilitiesMatches = [regex]::Matches($bootstrapContractSource, "(?m)^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([0-9]+(,[0-9]+)*)'\r?$")
 if ($bootstrapVersionMatches.Count -ne 1 -or $bootstrapCapabilitiesMatches.Count -ne 1) {
@@ -1616,6 +1632,7 @@ Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
 
 $temporaryFiles = $null
 $remoteStageDir = $null
+$remoteRuntimeStageDir = $null
 $localRouteState = $null
 $remoteClientStaged = $false
 try {
@@ -1936,7 +1953,18 @@ sudo rm -rf "$backup" "$stage"
             throw "CP3 network state passed and canonical files remain in '$clientDirectory', but Desktop delivery failed; rerun Apply to retry: $($_.Exception.Message)"
         }
     } else {
-        $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
+        if ($Checkpoint -eq '4' -and $Apply) {
+            $runtimeToken = [guid]::NewGuid().ToString('N')
+            $remoteRuntimeStageDir = '/tmp/powerseven-cp4-' + $runtimeToken
+            $runtimeStageCommand = 'umask 077; mkdir -m 700 -p "{0}"' -f $remoteRuntimeStageDir
+            $runtimeStageCommand = ConvertTo-LinuxLf -Name 'CP4 runtime staging command' -Content $runtimeStageCommand
+            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $runtimeStageCommand))
+            Invoke-Native $script:Scp ($keyOnlySshOptions + @($dockerComposeSource, ($target + ':' + $remoteRuntimeStageDir + '/compose.yml')))
+            Invoke-Native $script:Scp ($keyOnlySshOptions + @($dockerEnvironmentTemplate, ($target + ':' + $remoteRuntimeStageDir + '/.env.example')))
+            $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint -ExtraOption '--runtime-token' -ExtraValue $runtimeToken)
+        } else {
+            $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
+        }
         Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($remoteCheckpointArguments -join ' '))
         Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckpointArguments)
         Write-Result 'PASS' 'powerseven-bootstrap' "$action --checkpoint $Checkpoint completed"
@@ -1959,6 +1987,15 @@ finally {
         }
         catch {
             Write-Result 'WARN' 'cleanup' 'remote staging cleanup could not be confirmed'
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($remoteRuntimeStageDir)) {
+        try {
+            $runtimeStageCleanup = ConvertTo-LinuxLf -Name 'CP4 runtime staging cleanup command' -Content ('rm -rf "{0}"' -f $remoteRuntimeStageDir)
+            Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $runtimeStageCleanup))
+        }
+        catch {
+            Write-Result 'WARN' 'cleanup' 'CP4 runtime staging cleanup could not be confirmed'
         }
     }
 }

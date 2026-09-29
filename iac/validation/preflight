@@ -6,6 +6,8 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -324,6 +326,230 @@ def check_compose():
         report("PASS", "compose", f"declared services: {', '.join(sorted(actual))}")
 
 
+def check_vps14_cp4():
+    bootstrap = (IAC / "linux" / "bootstrap.sh").read_text(encoding="utf-8")
+    runner = (IAC / "windows" / "setup-powerseven.ps1").read_text(encoding="utf-8")
+    compose = load_yaml(IAC / "docker" / "compose.yml")
+    docker_versions = next(
+        (item for item in load_yaml(IAC / "versions.yml")["versions"] if item["name"] == "Docker Engine"),
+        None,
+    )
+    expected_packages = {
+        "docker-ce": "5:29.8.1-1~ubuntu.24.04~noble",
+        "docker-ce-cli": "5:29.8.1-1~ubuntu.24.04~noble",
+        "containerd.io": "2.3.6-1~ubuntu.24.04~noble",
+        "docker-compose-plugin": "5.5.1-1~ubuntu.24.04~noble",
+    }
+    package_constants = {
+        "docker-ce": "DOCKER_CE_VERSION",
+        "docker-ce-cli": "DOCKER_CE_VERSION",
+        "containerd.io": "CONTAINERD_IO_VERSION",
+        "docker-compose-plugin": "DOCKER_COMPOSE_VERSION",
+    }
+    versions_match = bool(
+        docker_versions
+        and docker_versions.get("target_version") == "29.8.1"
+        and docker_versions.get("package_versions") == expected_packages
+        and all(
+            re.search(
+                rf"^readonly {constant}='{re.escape(expected_packages[package])}'$",
+                bootstrap,
+                re.MULTILINE,
+            )
+            for package, constant in package_constants.items()
+        )
+    )
+    if versions_match:
+        report("PASS", "cp4-docker-pins", "versions.yml and bootstrap agree on exact Noble package versions")
+    else:
+        report("FAIL", "cp4-docker-pins", "Docker package pins differ across versions.yml and the Linux bootstrap")
+
+    package_version_match = re.search(
+        r"docker_package_version\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL
+    )
+    package_version_body = package_version_match.group("body") if package_version_match else ""
+    parsed_package = subprocess.run(
+        ["awk", '$1 == "ii" { print $2; exit }'],
+        input="ii  5:29.8.1-1~ubuntu.24.04~noble\n",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if (
+        package_version_match
+        and '$1 == "ii" { print $2; exit }' in package_version_body
+        and parsed_package.returncode == 0
+        and parsed_package.stdout.strip() == expected_packages["docker-ce"]
+    ):
+        report("PASS", "cp4-dpkg-version-parser", "dpkg-query status padding is parsed without changing the pinned package version")
+    else:
+        report("FAIL", "cp4-dpkg-version-parser", "installed Docker package version parsing is missing or retains status padding")
+
+    cp4_match = re.search(r"docker_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nwhile \[\[ \$# -gt 0 \]\])", bootstrap, re.DOTALL)
+    check_match = re.search(r"docker_foundation_check\(\) \{(?P<body>.*?)(?=\n\}\n\ninstall_docker_firewall_integration\(\))", bootstrap, re.DOTALL)
+    diagnostics_match = re.search(r"docker_app_diagnostics\(\) \{(?P<body>.*?)(?=\n\}\n\ndocker_foundation_check\(\))", bootstrap, re.DOTALL)
+    cp4_body = cp4_match.group("body") if cp4_match else ""
+    check_body = check_match.group("body") if check_match else ""
+    diagnostics_body = diagnostics_match.group("body") if diagnostics_match else ""
+    readonly_mutators = re.compile(
+        r"\b(?:apt-get|install|mkdir|mv|rm|chmod|curl|systemctl\s+(?:enable|start|restart|stop)|iptables\s+[^\n]*(?:\s-I\s|\s-D\s|\s-N\s)|docker\s+compose\s+(?:up|down|rm|prune))\b"
+    )
+    readonly_ok = bool(check_match and diagnostics_match and not readonly_mutators.search(check_body + diagnostics_body))
+    if readonly_ok:
+        report("PASS", "cp4-check-readonly", "OS, package, runtime, network, volume, container, port and dependency probes are read-only")
+    else:
+        report("FAIL", "cp4-check-readonly", "CP4 Check is missing or contains a mutating command")
+    if "report MISSING docker-ports 'ss is unavailable" in diagnostics_body:
+        report("PASS", "cp4-check-ports", "Check fails when the listener probe is unavailable and reports each catalog port")
+    else:
+        report("FAIL", "cp4-check-ports", "Check can pass without a local port/listener probe")
+
+    cp4_report_match = re.search(r"report\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    cp4_dispatch_match = re.search(r"    4\)\n(?P<body>.*?)\n        ;;", bootstrap, re.DOTALL)
+    cp4_check_failure_is_reported = bool(
+        cp4_report_match
+        and '"$1" == \'MISSING\'' in cp4_report_match.group("body")
+        and '"$MODE" == \'check\'' in cp4_report_match.group("body")
+        and '"$CHECKPOINT" == \'4\'' in cp4_report_match.group("body")
+        and "CHECK_NEEDS_APPLY=1" in cp4_report_match.group("body")
+        and cp4_dispatch_match
+        and '"$MODE" == \'check\'' in cp4_dispatch_match.group("body")
+        and "CHECK_NEEDS_APPLY" in cp4_dispatch_match.group("body")
+    )
+    if cp4_check_failure_is_reported:
+        report("PASS", "cp4-check-exit", "any CP4 MISSING result makes read-only Check return nonzero")
+    else:
+        report("FAIL", "cp4-check-exit", "CP4 Check may report missing state while returning success")
+
+    storage_match = re.search(r"docker_storage_check\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    group_match = re.search(r"docker_group_check\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    apply_missing_fails = all(
+        match
+        and '"$MODE" != \'apply\'' in match.group("body")
+        and "return 1" in match.group("body")
+        for match in (storage_match, group_match)
+    )
+    if apply_missing_fails:
+        report("PASS", "cp4-apply-postchecks", "Apply stops on missing persistent Docker storage or unsafe Docker group state")
+    else:
+        report("FAIL", "cp4-apply-postchecks", "Apply can report PASS after a storage or Docker group postcheck failure")
+
+    firewall_ok = all(
+        token in bootstrap
+        for token in (
+            "DOCKER-USER",
+            "-i wg-admin -s 10.99.0.0/24 -d 192.168.214.0/24",
+            "-o wg-admin -s 192.168.214.0/24 -d 10.99.0.0/24",
+            "Before=docker.service",
+            "Requires=powerseven-admin-firewall.service powerseven-docker-firewall.service",
+            "admin_firewall_is_ready",
+            "docker_firewall_rules_are_first || return 1",
+            "iptables -w -L FORWARD -v -n --line-numbers",
+        )
+    )
+    if firewall_ok:
+        report("PASS", "cp4-docker-firewall", "ordered DOCKER-USER rules preserve CP3 VPN-to-underlay forwarding before Docker starts")
+    else:
+        report("FAIL", "cp4-docker-firewall", "Docker firewall integration or CP2/CP3 preconditions are incomplete")
+
+    conflict_match = re.search(r"local -a packages=\(([^)]*)\)", cp4_body)
+    conflict_packages = set(re.findall(r"[A-Za-z0-9_.-]+", conflict_match.group(1))) if conflict_match else set()
+    if {"docker-doc", "docker-buildx", "docker.io", "podman-docker", "containerd", "runc"}.issubset(conflict_packages):
+        report("PASS", "cp4-package-conflicts", "officially conflicting distro Docker packages are detected and preserved")
+    else:
+        report("FAIL", "cp4-package-conflicts", "Apply may install over a conflicting distro Docker package")
+
+    bootstrap_prereqs = re.search(r"require_commands apt-get dpkg-query(?P<body>.*?); then return 1; fi", cp4_body)
+    prereq_install = cp4_body.find("apt-get install -y --no-install-recommends ca-certificates curl iptables")
+    backend_probe = cp4_body.find("grep -q 'nf_tables'")
+    if (
+        bootstrap_prereqs
+        and "iptables" not in bootstrap_prereqs.group(0)
+        and "curl" not in bootstrap_prereqs.group(0)
+        and prereq_install >= 0
+        and backend_probe > prereq_install
+        and "require_commands curl iptables" in cp4_body
+    ):
+        report("PASS", "cp4-prerequisite-order", "curl/iptables are installed before Apply checks the Docker firewall backend")
+    else:
+        report("FAIL", "cp4-prerequisite-order", "clean Ubuntu Apply requires a package before installing it")
+
+    diagnostics_match = re.search(r"docker_app_diagnostics\(\) \{(?P<body>.*?)(?=\n\}\n\ndocker_foundation_check\(\))", bootstrap, re.DOTALL)
+    diagnostics = diagnostics_match.group("body") if diagnostics_match else ""
+    inventories = {
+        "networks": {network.get("name", f"powerseven_{name}") for name, network in compose.get("networks", {}).items()},
+        "volumes": {volume.get("name", f"powerseven_{name}") for name, volume in compose.get("volumes", {}).items()},
+        "containers": {service.get("container_name", f"powerseven-{name}") for name, service in compose.get("services", {}).items()},
+    }
+    inventory_match = True
+    for kind, expected in inventories.items():
+        match = re.search(rf"local -a {kind}=\(([^)]*)\)", diagnostics)
+        actual = set(re.findall(r"[A-Za-z0-9_.-]+", match.group(1))) if match else set()
+        inventory_match = inventory_match and actual == expected
+    expected_ports = set()
+    for service in compose.get("services", {}).values():
+        for port in service.get("ports", []):
+            if isinstance(port, str):
+                fields = port.split("/", 1)[0].split(":")
+                if len(fields) >= 2:
+                    expected_ports.add(fields[-2])
+            elif isinstance(port, dict) and port.get("published"):
+                expected_ports.add(str(port["published"]))
+    port_match = re.search(r"for port in ([0-9 ]+); do", diagnostics)
+    actual_ports = set(port_match.group(1).split()) if port_match else set()
+    if inventory_match and actual_ports == expected_ports:
+        report("PASS", "cp4-check-inventory", "network, volume, container and published-port diagnostics match Compose")
+    else:
+        report("FAIL", "cp4-check-inventory", "CP4 Check inventory or published-port list drifted from Compose")
+
+    wrapper_match = re.search(r"\$wrapper = @'\n(?P<body>.*?)\n'@", runner, re.DOTALL)
+    runner_stage_ok = (
+        all(
+            token in runner
+            for token in (
+                "docker\\compose.yml",
+                "docker\\.env.example",
+                "--runtime-token",
+                "($dockerComposeSource",
+                "($dockerEnvironmentTemplate",
+                "CP4 runtime staging cleanup command",
+            )
+        )
+        and wrapper_match is not None
+        and "invalid CP4 runtime staging token" in wrapper_match.group("body")
+    )
+    if runner_stage_ok:
+        report("PASS", "cp4-runner-stage", "DC02 stages only the tracked Compose catalog/template in a token-guarded remote directory")
+    else:
+        report("FAIL", "cp4-runner-stage", "CP4 runner payload staging or wrapper token allowlist is incomplete")
+
+    if (
+        "docker compose up" not in cp4_body
+        and "docker compose down" not in cp4_body
+        and "REQUIRED_DECISION" in (IAC / "docker" / ".env.example").read_text(encoding="utf-8")
+        and "REQUIRED_SECRET" in (IAC / "docker" / ".env.example").read_text(encoding="utf-8")
+    ):
+        report("PASS", "cp4-application-gate", "no containers start while image decisions, secrets and host database/LDAP setup remain unresolved")
+    else:
+        report("FAIL", "cp4-application-gate", "CP4 could start an application stack with unresolved runtime inputs")
+
+    docker = shutil.which("docker")
+    if docker:
+        result = subprocess.run(
+            [docker, "compose", "-f", str(IAC / "docker" / "compose.yml"), "--env-file", str(IAC / "docker" / ".env.example"), "config", "--quiet"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            report("PASS", "cp4-compose-config", "tracked catalog parses with placeholders; no pull/start performed")
+        else:
+            report("FAIL", "cp4-compose-config", result.stderr.strip() or f"docker compose config exited {result.returncode}")
+    else:
+        report("WARN", "cp4-compose-config", "Docker CLI unavailable; the Compose runtime config check was not run")
+
+
 def main() -> int:
     check_yaml_json()
     graph = json.loads(GRAPH.read_text(encoding="utf-8"))
@@ -343,6 +569,7 @@ def main() -> int:
     check_vmware_definitions(load_yaml(IAC / "vmware" / "vm-definitions.yml"))
     check_scope_separation(inventories)
     check_compose()
+    check_vps14_cp4()
     print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
     return 1 if FAIL else 0
 

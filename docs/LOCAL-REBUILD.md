@@ -112,10 +112,11 @@ provisiona VM o host automaticamente.
   installato.
 - **Stato:** **PARTIAL**. Credential bootstrap DC02→VPS14, SSH key persistence,
   rerun passwordless, wrapper NOPASSWD ristretto, migrazione/rollback del
-  bootstrap, Checkpoint 1 storage e CP2 networking sono **LIVE VALIDATED**.
-  CP2 è stato validato anche dopo reboot di VPS14, con `-Check -Checkpoint 2`
-  completamente PASS. CP3 VPN resta **NOT YET LIVE VALIDATED**. Il bootstrap
-  Windows VPS13 è **LIVE VALIDATED**.
+  bootstrap, Checkpoint 1 storage, CP2 networking e CP3 VPN sono
+  **LIVE VALIDATED**. CP2 è stato validato anche dopo reboot di VPS14 con
+  `-Check -Checkpoint 2` completamente PASS. CP3 è PASS in Apply e Check,
+  compresi WireGuard, route, firewall RDP e delivery. Il bootstrap Windows
+  VPS13 è **LIVE VALIDATED**.
 
 ### PHASE 4 — rete/IP underlay
 
@@ -186,18 +187,23 @@ interattivamente. La funzione `Ensure-PowerSevenUser` è separata dalla UI e pu�
 essere riusata da un runner futuro con un `users.local.psd1` ignorato da Git;
 le password non vengono versionate.
 
-### PHASE 6 — VPS14 servizi base
+### PHASE 6 — CP4 foundation Docker VPS14
 
-- **Modalità:** manuale con dichiarazioni riutilizzabili.
-- **Comandi previsti:** nessun apply repository; dopo bootstrap il controllo
-  statico Compose è `docker compose config` usando un `.env` locale completo.
-- **Prerequisiti:** VPS14 underlay, DC02/DNS funzionante, Docker e secret locali.
-- **Risultato atteso:** Docker, reti, AdGuard vuoto, PostgreSQL/MariaDB/Redis
-  secondo i consumatori, Nginx e dashboard AD-only.
-- **Stato:** **PARTIAL**. `iac/docker/compose.yml` è un catalogo dichiarativo
-  con immagini/secret placeholder e non contiene il servizio cron Nextcloud;
-  i role Ansible applicativi sono contratti. Non esiste installazione
-  riproducibile di dashboard, Nginx, database o AdGuard.
+- **Modalità:** runner Windows su DC02, checkpoint idempotente e Check read-only.
+- **Comando:** `setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14
+  -UbuntuUsername serveradmin -Checkpoint 4`.
+- **Prerequisiti:** Ubuntu Server 24.04 Noble amd64, SSH, CP2 e CP3 validati.
+- **Risultato CP4:** Docker Engine/Compose pinnati, firewall `DOCKER-USER`
+  integrato con l'inoltro VPN CP3 e file runtime Compose root-owned. Check
+  distingue pacchetti, config, reti, volumi, container, health, porte e DB.
+- **Limite attuale:** i container applicativi non vengono avviati. Il Compose
+  usa image tag/secret placeholder, database host PostgreSQL/MariaDB assenti,
+  manca la configurazione LDAP completa e service-control non ha un installer
+  locale coerente. Questi servizi richiedono una milestone successiva.
+- **Gate LIVE:** Docker segnala che le regole firewall create direttamente con
+  `nft` non sono supportate insieme al suo backend standard `iptables-nft`;
+  prima di distribuire le app, il test CP4 isolato deve confermare route VPN,
+  RDP e isolamento della NIC Bridged.
 
 ### PHASE 7 — VPS12 desktop/client
 
@@ -266,12 +272,12 @@ le password non vengono versionate.
 | Area | Classificazione | Evidenza reale |
 |---|---|---|
 | `iac/vmware/` | A + B | `preflight-host` e `validate-vms` sono read-only eseguibili; YAML e path example sono dichiarativi. Creazione VM intenzionalmente assente. |
-| `iac/linux/` | A parziale + B/C | `bootstrap.sh` implementa il checkpoint storage LVM read-only/apply; autoinstall e variables restano template con placeholder. Rete, pacchetti e servizi non sono ancora implementati. |
+| `iac/linux/` | A parziale + B/C | `bootstrap.sh` implementa CP1 storage, CP2 rete, CP3 VPN e CP4 Docker foundation. Autoinstall/cloud-init restano template con input segreti non renderizzati; database e servizi applicativi restano incompleti. |
 | `iac/windows/` | A + B | `bootstrap.ps1` implementa checkpoint 1-8 ed è stato validato live su VPS13; `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Ansible Windows non è completo. |
 | `iac/ansible/` | A limitata + B/C | playbook e inventory sono invocabili come struttura; `check.yml` è un check contract; solo `roles/wazuh_server/tasks/main.yml` contiene task reali, gli altri role sono README. |
-| `iac/docker/` | B/C | Compose è dichiarativo e usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi live. |
+| `iac/docker/` | B/C | Compose è catalogo runtime distribuito da CP4 ma usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi host live. |
 | `iac/service-control/` | A runtime/static + B | controller Python e validator sono eseguibili; unità systemd e YAML sono template di installazione, non un installer. |
-| `iac/validation/` | A read-only | `preflight` controlla YAML/JSON, grafo, rete, secret pattern, cicli, porte, VM e Compose. |
+| `iac/validation/` | A read-only | `preflight` controlla YAML/JSON, grafo, rete, secret pattern, cicli, porte, VM, Compose e contract CP4. |
 | `iac/inventory/` | B | cataloghi dichiarativi di host, rete, DNS, servizi, storage e ordine; nessun apply. |
 | `iac/versions.yml` | B/C | matrice di policy; molte versioni e checksum sono ancora `REQUIRED_DECISION`. |
 
@@ -280,10 +286,10 @@ le password non vengono versionate.
 | Componente | Stato attuale | Mancante | Prossima implementazione |
 |---|---|---|---|
 | VM VMware | GUI + validator read-only | nessun create API, per scelta | checklist GUI e usare `validate-vms` |
-| Ubuntu bootstrap | checkpoint storage LVM eseguibile + autoinstall template | rete, pacchetti, WireGuard e servizi VPS14 | estendere `bootstrap.sh` a checkpoint separati e testarli su VPS14 |
+| Ubuntu bootstrap | CP1 storage, CP2 rete, CP3 WireGuard e CP4 Docker foundation automatizzati | servizi host e deploy applicazioni | testare CP4 su un'installazione isolata Ubuntu Server 24.04.4 |
 | Windows provisioning | workflow PowerShell checkpoint 1-8 live validato | integrazione Ansible e firewall policy completa | wrapper Ansible e policy firewall |
 | Ansible | inventory/playbook/contratti | task per tutti i role eccetto tuning Wazuh | implementare un role per checkpoint |
-| Docker Compose | servizi dichiarati, `restart: no` | tag approvati, `.env`, cron Nextcloud, config/volumi live | chiudere immagini e deployment per app |
+| Docker Compose | catalogo runtime distribuito da CP4, `restart: no` | tag approvati, secret, DB host, LDAP, healthcheck, cron Nextcloud e avvio service-control | milestone separata per database e applicazioni, senza `down -v` |
 | CA/TLS | riferimenti e contratti | generazione CA/certificati e trust | generatore locale escluso da Git |
 | AD users/groups | gruppi automatici + utenti interattivi al checkpoint 6 live validati | manifest locale non ancora orchestrato | mantenere password interattive; aggiungere manifest locale in seguito |
 | DNS records | `iac/windows/provisioning.psd1` + checkpoint 5/7 live validati | forwarder finale AdGuard resta successivo | riconciliare il forwarder finale quando AdGuard sarà disponibile |
@@ -310,8 +316,9 @@ locali restano in `iac/vmware/*.local.yml` o nel file ignorato
 1. chiudere decisioni versioni/ISO e validare le tre VM;
 2. completare bootstrap OS e underlay statico;
 3. eseguire e validare DC02 AD/DNS con i checkpoint PowerShell;
-4. implementare VPS14 base, AdGuard, Docker, database e CA;
-5. implementare WireGuard/DNS finale e trust;
+4. applicare/testare CP4 foundation Docker su una VPS14 pulita e isolata;
+5. completare database host e configurare/applicare AdGuard, CA e policy porte
+   container senza alterare il confine CP3;
 6. implementare un'applicazione per volta: dashboard, Forgejo, Nextcloud,
    Stirling, Pterodactyl, Wazuh;
 7. installare service-control e solo dopo eseguire acceptance E2E.

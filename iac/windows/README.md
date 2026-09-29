@@ -135,4 +135,38 @@ distinti; una policy che vieta RDP o un listener assente impediscono il PASS.
 - `secrets.psd1`: file locale ignorato da Git, opzionale; in assenza il
   workflow richiede DSRM e password utenti con `Read-Host -AsSecureString`.
 
+### Checkpoint 4 — Docker foundation VPS14
+
+Con CP2 e CP3 già verificati, eseguire da PowerShell Administrator su DC02:
+
+```powershell
+.\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 4
+.\setup-powerseven.ps1 -Check -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 4
+```
+
+Apply aggiorna il bootstrap al contract v15, installa il set Docker Engine
+29.8.1/Compose 5.5.1 esattamente pinnato, mette i file Compose in
+`/opt/powerseven/docker/` e abilita Docker. Il runner trasferisce soltanto il
+catalogo tracciato e `.env.example` attraverso una directory SSH temporanea
+con token casuale; la directory viene rimossa anche dopo un errore. Nessun
+`.env` privato o secret applicativo viene trasferito.
+
+Le regole `DOCKER-USER` sono installate prima che Docker parta: permettono
+solo il forwarding VPN già previsto da CP3 e il traffico di risposta. Le
+regole CP3 nftables, WireGuard, peer, route e firewall RDP restano invariate.
+Apply rifiuta pacchetti Docker conflittuali, dati `/var/lib/docker` non
+associati a un Engine installato, o file runtime non gestiti/editati; non usa
+`docker compose down`, prune o comandi che cancellano volumi.
+
+Check non cambia lo stato. Riporta separatamente prerequisiti OS, CP2/CP3,
+Docker, Compose/runtime, reti, volumi, container, healthcheck, porte locali e
+database. Le risorse applicative assenti sono diagnostica informativa perché
+CP4 non avvia ancora i container.
+
+Il deployment dei servizi resta una milestone successiva: il catalogo ha
+immagini `REQUIRED_DECISION`, password `REQUIRED_SECRET`, database host non
+inclusi in Compose e nessuna configurazione LDAP completa; inoltre il
+service-control attuale non ha un installer coerente per il target locale.
+Non inserire valori fittizi per superare questi gate.
+
 AD CS, LDAPS, CA, WireGuard e gli altri host restano fuori scope.

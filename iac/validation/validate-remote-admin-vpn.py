@@ -942,7 +942,7 @@ def main() -> int:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
         report("FAIL", "windows-runner", "DC02 integration is incomplete")
-    cp3_runner_match = re.search(r"\} elseif \(\$Checkpoint -eq '3' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} else \{\n        \$remoteCheckpointArguments)", runner, re.DOTALL)
+    cp3_runner_match = re.search(r"\} elseif \(\$Checkpoint -eq '3' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} else \{\n        if \(\$Checkpoint -eq '4' -and \$Apply\))", runner, re.DOTALL)
     cp3_runner = cp3_runner_match.group("body") if cp3_runner_match else ""
     runner_stages = [cp3_runner.find(token) for token in (
         "Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)",
@@ -1054,8 +1054,8 @@ def main() -> int:
         report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
     else:
         report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
-    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--admin-endpoint", "--network-token", "--confirm-network", "--cleanup-client", "--peer-list", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
-        report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
+    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--admin-endpoint", "--network-token", "--confirm-network", "--cleanup-client", "--peer-list", "--runtime-token", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
+        report("PASS", "wrapper-allowlist", "extended CP2/CP3/CP4 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
     network_checkpoint_match = re.search(r"network_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nensure_wireguard_server_keys\(\))", bootstrap, re.DOTALL)

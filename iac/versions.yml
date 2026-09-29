@@ -40,11 +40,16 @@ versions:
     pin_required: true
     notes: version not established by current model
   - name: Docker Engine
-    target_version: REQUIRED_DECISION
-    version_policy: vendor_supported_stable
+    target_version: "29.8.1"
+    version_policy: pin_exact_package_set
     installation_source: Docker official repository
     pin_required: true
-    notes: Compose plugin version must be selected with Engine
+    package_versions:
+      docker-ce: "5:29.8.1-1~ubuntu.24.04~noble"
+      docker-ce-cli: "5:29.8.1-1~ubuntu.24.04~noble"
+      containerd.io: "2.3.6-1~ubuntu.24.04~noble"
+      docker-compose-plugin: "5.5.1-1~ubuntu.24.04~noble"
+    notes: versions read from Docker's signed Noble amd64 APT repository on 2026-09-29; Engine firewall backend remains the default iptables backend
   - name: PostgreSQL
     target_version: "18.6"
     version_policy: pin_minor
