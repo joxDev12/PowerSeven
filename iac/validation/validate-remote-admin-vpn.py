@@ -206,6 +206,70 @@ def cold_state_fixture(persistent_ready: bool) -> bool:
     return persistent_ready
 
 
+def admin_profile_update_fixture(runner: str) -> bool:
+    updater_match = re.search(
+        r"function Update-AdminClientProfile \{(?P<body>.*?)(?=\n\}\n\nfunction Test-DC02AdminState)",
+        runner,
+        re.DOTALL,
+    )
+    body = updater_match.group("body") if updater_match else ""
+    replace_calls = re.findall(r"\[System\.IO\.File\]::Replace\(([^)]+)\)", runner)
+    apply_replace = "[System.IO.File]::Replace($temporaryPath, $Path, $backupPath)"
+    rollback_replace = "[System.IO.File]::Replace($backupPath, $Path, $rollbackPath)"
+    if not (
+        updater_match and replace_calls == ["$temporaryPath, $Path, $backupPath", "$backupPath, $Path, $rollbackPath"] and
+        body.find("Set-RestrictedAcl -Path $temporaryPath") < body.find(apply_replace) < body.find("Set-RestrictedAcl -Path $Path") and
+        body.find("Set-RestrictedAcl -Path $Path") < body.find("Remove-Item -LiteralPath $backupPath") and
+        body.find("if (Test-Path -LiteralPath $backupPath)") < body.find(rollback_replace) < body.find("[System.IO.File]::Move($backupPath, $Path)") and
+        "if (Test-Path -LiteralPath $Path)" in body and
+        "'.powerseven-profile-backup-'" in body and "'.powerseven-profile-rollback-'" in body and
+        "[System.IO.File]::Replace($temporaryPath, $Path, $null)" not in runner
+    ):
+        return False
+
+    original = (
+        "[Interface]\nPrivateKey = FIXTURE_PRIVATE_KEY\nAddress = 10.99.0.2/32\nDNS = 192.168.214.13\n\n"
+        "[Peer]\nPublicKey = FIXTURE_PUBLIC_KEY\nEndpoint = 192.168.214.145:51820\n"
+        "AllowedIPs = 192.168.214.0/24\nPersistentKeepalive = 25\n"
+    )
+
+    def migrate(content: str) -> str | None:
+        endpoints = re.findall(r"(?m)^Endpoint = \S+:51820$", content)
+        routes = re.findall(r"(?m)^AllowedIPs = .+$", content)
+        if len(endpoints) != 1 or len(routes) != 1:
+            return None
+        return content.replace(endpoints[0], "Endpoint = 192.168.214.14:51820").replace(
+            routes[0], "AllowedIPs = 192.168.214.0/25, 192.168.214.128/25"
+        )
+
+    updated = migrate(original)
+    expected = original.replace("Endpoint = 192.168.214.145:51820", "Endpoint = 192.168.214.14:51820").replace(
+        "AllowedIPs = 192.168.214.0/24", "AllowedIPs = 192.168.214.0/25, 192.168.214.128/25"
+    )
+    if (updated != expected or "PrivateKey = FIXTURE_PRIVATE_KEY" not in updated or
+            migrate(original + "Endpoint = 192.168.214.14:51820\n") is not None or
+            migrate(original + "AllowedIPs = 192.168.214.0/24\n") is not None):
+        return False
+
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory) / "powerseven-admin-fixture.conf"
+        staged = Path(directory) / ".powerseven-profile-fixture"
+        backup = Path(directory) / ".powerseven-profile-backup-fixture"
+        original_bytes, updated_bytes = original.encode(), updated.encode()
+
+        target.write_bytes(original_bytes)
+        staged.write_bytes(updated_bytes)
+        if target.read_bytes() != original_bytes:
+            return False  # a failure before atomic replacement leaves the original intact
+
+        backup.write_bytes(target.read_bytes())
+        os.replace(staged, target)
+        if target.read_bytes() != updated_bytes:
+            return False
+        os.replace(backup, target)  # rollback after a post-replacement failure
+        return target.read_bytes() == original_bytes
+
+
 def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
     try:
         ranges = []
@@ -605,12 +669,17 @@ def main() -> int:
         report("PASS", "cp3-rdp-normalization", "CIDR/netmask, host, IPv6 and firewall keyword aliases compare semantically")
     else:
         report("FAIL", "cp3-rdp-normalization", "firewall address normalization misses an equivalent representation")
+    profile_migration_ok = admin_profile_update_fixture(runner)
+    if profile_migration_ok:
+        report("PASS", "cp3-profile-migration", "endpoint/routes migrate alone; atomic backup and rollback preserve the original profile")
+    else:
+        report("FAIL", "cp3-profile-migration", "client profile update is not atomic, recoverable or key-preserving")
     scp_source = "Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))"
     if (scp_source in cp3_runner and
             "$remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name" in cp3_runner and
             'Invoke-Native $script:Scp ($keyOnlySshOptions + @($target +' not in cp3_runner and
             cp3_runner.find("Get-RemoteAdminEndpoint") < cp3_runner.find("Update-AdminClientProfile") < cp3_runner.find("--cleanup-client") and
-            "[System.IO.File]::Replace($temporaryPath, $Path, $null)" in runner and
+            profile_migration_ok and
             '$content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint")' in runner and
             '.Replace($allowedMatches[0].Value, "AllowedIPs = $script:AdminClientAllowedIPs")' in runner and
             "if ($AllowLegacyRoutes) { $validRoutes += $script:LegacyAdminClientAllowedIPs }" in runner and

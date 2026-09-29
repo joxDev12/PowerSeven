@@ -1016,15 +1016,40 @@ function Update-AdminClientProfile {
     if ($endpointMatches.Count -ne 1 -or $allowedMatches.Count -ne 1) { throw "Client profile has invalid endpoint/AllowedIPs lines: $Path" }
     $updated = $content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint").Replace($allowedMatches[0].Value, "AllowedIPs = $script:AdminClientAllowedIPs")
     if ($updated -ceq $content) { return }
-    $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.powerseven-profile-' + [guid]::NewGuid().ToString('N'))
+    $profileDirectory = Split-Path -Parent $Path
+    $temporaryPath = Join-Path $profileDirectory ('.powerseven-profile-' + [guid]::NewGuid().ToString('N'))
+    $backupPath = Join-Path $profileDirectory ('.powerseven-profile-backup-' + [guid]::NewGuid().ToString('N'))
+    $rollbackPath = Join-Path $profileDirectory ('.powerseven-profile-rollback-' + [guid]::NewGuid().ToString('N'))
     try {
         [System.IO.File]::WriteAllText($temporaryPath, $updated, [System.Text.UTF8Encoding]::new($false))
         Set-RestrictedAcl -Path $temporaryPath -Directory $false
-        [System.IO.File]::Replace($temporaryPath, $Path, $null)
-        Set-RestrictedAcl -Path $Path -Directory $false
+        try {
+            [System.IO.File]::Replace($temporaryPath, $Path, $backupPath)
+            Set-RestrictedAcl -Path $Path -Directory $false
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction Stop
+        }
+        catch {
+            $updateFailure = $_.Exception.Message
+            if (Test-Path -LiteralPath $backupPath) {
+                try {
+                    if (Test-Path -LiteralPath $Path) {
+                        [System.IO.File]::Replace($backupPath, $Path, $rollbackPath)
+                        if (Test-Path -LiteralPath $rollbackPath) {
+                            Remove-Item -LiteralPath $rollbackPath -Force -ErrorAction Stop
+                        }
+                    } else {
+                        [System.IO.File]::Move($backupPath, $Path)
+                    }
+                }
+                catch {
+                    throw "Client profile update failed ($updateFailure); inspect '$Path', '$backupPath' and '$rollbackPath' to recover the original profile: $($_.Exception.Message)"
+                }
+            }
+            throw
+        }
     }
     finally {
-        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force }
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue }
     }
     Write-Result 'PASS' 'admin-client-profile' "updated $(Split-Path -Leaf $Path) endpoint/routes without changing its private key"
 }
