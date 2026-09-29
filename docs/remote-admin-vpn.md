@@ -14,15 +14,15 @@ Ogni client usa `AllowedIPs = 192.168.214.0/24`; Internet resta sulla connession
 route persistente `10.99.0.0/24 via 192.168.214.14`; il masquerade non è la
 configurazione normale. La route equivalente per VPS12 arriva più avanti.
 
-## VMware: operazioni manuali prima del live test
+## VMware e LAN fisica: prerequisiti CP3
 
-1. Spegnere VPS14.
-2. Conservare la NIC 1 su VMnet8 e aggiungere la NIC 2 su Bridged.
-3. Abilitare “Connected” e “Connect at power on”; scegliere la scheda fisica
-   Wi-Fi/Ethernet reale, non una rete virtuale.
-4. Non modificare MAC/order della NIC VMnet8. Annotare il MAC della Bridged e,
-   se possibile, assegnarle una DHCP reservation sulla LAN fisica.
-5. Verificare che la LAN fisica non usi `192.168.214.0/24` e che il Wi-Fi non
+1. Confermare la configurazione VMware già validata in CP2: NIC 1 su VMnet8,
+   NIC 2 Bridged sulla scheda fisica, “Connected” e “Connect at power on”.
+2. Non modificare MAC/order della NIC VMnet8. Annotare il MAC della Bridged e
+   assegnarle una DHCP reservation sulla LAN fisica prima del primo Apply CP3.
+   I profili client contengono questo IP come endpoint: se cambia, aggiornare
+   `Endpoint` in entrambi i profili senza rigenerare le chiavi.
+3. Verificare che la LAN fisica non usi `192.168.214.0/24` e che il Wi-Fi non
    abbia client isolation tra laptop e VM.
 
 Nessun port-forward è necessario per il test dalla stessa LAN. Un eventuale
@@ -46,6 +46,10 @@ CP3 installa `wg-admin`, chiavi server persistenti, forwarding IPv4 e una
 tabella nftables dedicata. Dalla Bridged è permesso solo UDP/51820 e traffico
 di ritorno; SSH, Cockpit, PostgreSQL, Docker, Nginx, RDP e applicazioni non
 vengono aperti direttamente sulla LAN fisica.
+Il firewall viene caricato prima dell'avvio di WireGuard, con dipendenza
+systemd anche ai reboot. `-Check -Checkpoint 3` verifica le regole nftables
+effettive, oltre alla configurazione persistente. Il runner completa VPN,
+export e pulizia dei profili prima di modificare route e filtro RDP su DC02.
 
 Il runner crea/verifica su DC02 la route verso `10.99.0.0/24`, limita le regole
 RDP inbound di DC02 alla subnet `10.99.0.0/24` e salva senza password:
@@ -61,18 +65,38 @@ le public key; dopo ogni SCP validato il runner elimina lo staging del peer.
 Se un peer esiste ma il
 config locale è perso, il rerun fallisce senza rigenerare identità: serve una
 rotazione esplicita.
+Conservare i due file protetti su DC02 e copiare ciascuno solo sul proprio
+computer. Un rerun riusa le identità; se si interrompe prima della pulizia,
+lo staging residuo permette di recuperare il profilo mancante.
 
-## Test di accettazione
+## Primo test LIVE
 
-Da Jarvis o dal laptop importare il rispettivo `.conf`, connettere WireGuard e verificare:
+1. Su LAN/router fisico confermare la DHCP reservation della NIC Bridged di
+   VPS14 e annotare IP assegnato. CP2 è già stato validato LIVE dopo reboot;
+   il nuovo runner v11 migrerà il bootstrap Linux durante l'Apply CP3.
+2. Su DC02, PowerShell Administrator: `setup-powerseven.ps1 -Apply -Checkpoint 3`
+   con `-Vps14Address 192.168.214.14` e lo stesso `-UbuntuUsername` del CP2.
+   Se fallisce, ispezionare l'errore e rieseguire lo stesso Apply dopo la
+   correzione; non cancellare profili, public key o staging per tentare il rerun.
+3. Eseguire `setup-powerseven.ps1 -Check -Checkpoint 3`. Su VPS14 verificare
+   `systemctl is-active powerseven-admin-firewall wg-quick@wg-admin`,
+   `nft list table inet powerseven_admin` e `wg show wg-admin`, senza esporre
+   private key. Su DC02 confermare route attiva e persistente e che le regole
+   RDP inbound allow TCP/3389 accettino solo `10.99.0.0/24`.
+4. Copiare il profilo `jarvis` su Jarvis e `giorgio-laptop` sul portatile in
+   modo protetto. Importare ogni profilo sul computer corrispondente; i due
+   computer hanno chiavi private distinte. Nessun profilo è destinato a Codex.
+
+Da Jarvis e poi dal laptop, con il rispettivo tunnel attivo, verificare:
 
 ```text
-ping 10.99.0.1
+ping 192.168.214.14
 ping 192.168.214.13
 RDP 192.168.214.13:3389
 ```
 
 Verificare inoltre che SSH/servizi VPS14 non siano raggiungibili dall'IP LAN
-bridged e che la default route VPS14 resti unica via `192.168.214.2`.
+bridged, che la default route VPS14 resti unica via `192.168.214.2` e che
+Internet dei due client continui a usare la propria connessione normale.
 Codex usa la VPN del computer corrente e non gestisce tunnel o chiavi.
 L'automation-user su DC02 non viene creato in questa fase.

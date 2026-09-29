@@ -18,7 +18,8 @@ workflow.
 
 VMnet8: `192.168.214.0/24`, gateway `192.168.214.2`; VPS14 usa DNS DC02
 `192.168.214.13`. La NIC Bridged usa DHCP senza default route né DNS. Il VPN
-amministrativo separato è `10.99.0.0/24` (`wg-admin` `.1`, laptop `.2`);
+amministrativo separato è `10.99.0.0/24` (`wg-admin` `.1`, Jarvis `.2`,
+giorgio-laptop `.3`);
 `10.10.10.0/24` resta riservato al futuro overlay applicativo.
 
 Totale allocato: 8 vCPU, 10 GiB RAM, 180 GiB thin. L'host deve avere ulteriore
@@ -94,7 +95,7 @@ provisiona VM o host automaticamente.
   vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
   configura route persistente DC02, firewall RDP e recupera il client config
   fuori repository.
-- **Persistenza CP2:** il bootstrap contract corrente è `v10`. Dopo `netplan generate`
+- **Persistenza CP2:** il bootstrap contract corrente è `v11`. Dopo `netplan generate`
   verifica i file networkd MAC-matched, ricarica e riconfigura le due NIC; se
   restano unmanaged esegue un singolo restart protetto di systemd-networkd.
   Lo stato `configured` e il file `.network` attivo sono letti da `networkctl status`.
@@ -111,16 +112,10 @@ provisiona VM o host automaticamente.
   installato.
 - **Stato:** **PARTIAL**. Credential bootstrap DC02→VPS14, SSH key persistence,
   rerun passwordless, wrapper NOPASSWD ristretto, migrazione/rollback del
-  bootstrap e Checkpoint 1 storage sono **LIVE VALIDATED**; CP2 networking,
-  CP3 VPN e la UX remota `-Check`/`-PrepareBootstrap` sono implementati ma
-  **NOT YET LIVE VALIDATED**. Il bootstrap Windows VPS13 è **LIVE VALIDATED**.
-
-  Il primo check remoto CP2 ha confermato key-only e il rilevamento del
-  bootstrap live CP1-only; si è fermato esclusivamente per un errore di
-  `ValidateSet` sullo status `MISSING`, corretto nella milestone corrente.
-  Il terminale è sembrato attendere un input dopo il terzo PASS: comportamento
-  da verificare domani solo se si ripresenta; non è stata introdotta alcuna
-  modifica speculativa.
+  bootstrap, Checkpoint 1 storage e CP2 networking sono **LIVE VALIDATED**.
+  CP2 è stato validato anche dopo reboot di VPS14, con `-Check -Checkpoint 2`
+  completamente PASS. CP3 VPN resta **NOT YET LIVE VALIDATED**. Il bootstrap
+  Windows VPS13 è **LIVE VALIDATED**.
 
 ### PHASE 4 — rete/IP underlay
 
@@ -131,12 +126,11 @@ provisiona VM o host automaticamente.
 - **Prerequisiti:** OS installato; VMnet8/gateway validati.
 - **Risultato atteso:** VMnet8 `.12/.13/.14` statici, gateway `.2`, DNS DC02
   `.13`; NIC Bridged DHCP senza default route/DNS e senza collisione subnet.
-- **Stato:** **IMPLEMENTED / REQUIRES LIVE REBOOT VALIDATION** per CP2 Linux;
-  il precedente runtime CP2 era LIVE VALIDATED, ma il test post-reboot ha
-  rilevato `/etc/netplan` vuota. Il fix v6 aggiunge validazione persistence,
-  lock transaction e isolamento dei rollback; va migrato e ritestato prima di
-  dichiarare CP2 definitivamente LIVE VALIDATED. La rete VPS13 Windows è
-  **LIVE VALIDATED** con interfaccia reale.
+- **Stato:** **LIVE VALIDATED** per CP2 Linux anche dopo reboot di VPS14:
+  VMnet8 `.14/24`, Bridged DHCP, route predefinita `.2`, DNS `.13`,
+  systemd-networkd e Netplan persistente verificati; SSH è tornato
+  autonomamente e il runner `-Check -Checkpoint 2` è completamente PASS.
+  Anche la rete VPS13 Windows è **LIVE VALIDATED** con interfaccia reale.
 - **Reboot acceptance CP2:** dopo `-Apply` e conferma token, eseguire un
   reboot manuale controllato; poi `-Check -Checkpoint 2` deve verificare
   `.14/24`, Bridged DHCP, unica default route `.2`, DNS `.13`, networkd
@@ -219,13 +213,14 @@ le password non vengono versionate.
 
 ### PHASE 8 — WireGuard/DNS/CA
 
-- **Modalità:** runner controllato da DC02; nessun WireGuard su Jarvis/Fedora.
+- **Modalità:** runner controllato da DC02; Jarvis e portatile importano
+  soltanto il rispettivo profilo client WireGuard.
 - **Comandi previsti:** `sudo powerseven-bootstrap --check/--apply
   --checkpoint 3`, con route DC02 persistente e test RDP `10.99.0.2 ->
   192.168.214.13:3389`.
 - **Prerequisiti:** CP2 confermato, seconda NIC Bridged configurata in VMware,
   LAN fisica non sovrapposta, secret/key bootstrap già validati.
-- **Risultato atteso:** `wg-admin` `.1`, client `.2`, UDP/51820 soltanto sulla
+- **Risultato atteso:** `wg-admin` `.1`, Jarvis `.2`, giorgio-laptop `.3`, UDP/51820 soltanto sulla
   Bridged, nessun NAT normale, config client in `C:\ProgramData\PowerSeven\clients`.
 - **Stato:** **IMPLEMENTED / NOT YET LIVE VALIDATED** per VPN admin;
   peer VPS12/VPS13, CA, DNS applicativo e overlay `10.10.10.0/24` restano

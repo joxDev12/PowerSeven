@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
-readonly POWERSEVEN_BOOTSTRAP_VERSION='10'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='11'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -1155,12 +1155,8 @@ EOF
     rm -f "$temporary_config"
 )
 
-ensure_admin_firewall() {
-    local firewall_file='/etc/powerseven/admin-vpn.nft'
-    local firewall_script='/usr/local/lib/powerseven/apply-admin-firewall.sh'
-    local firewall_unit='/etc/systemd/system/powerseven-admin-firewall.service'
-    install -d -m 0750 /etc/powerseven /usr/local/lib/powerseven
-    cat > "$firewall_file" <<EOF
+render_admin_firewall() {
+    cat <<EOF
 table inet powerseven_admin {
     chain input {
         type filter hook input priority -100; policy accept;
@@ -1179,20 +1175,64 @@ table inet powerseven_admin {
     }
 }
 EOF
-    chmod 600 "$firewall_file"
-    nft -c -f "$firewall_file"
-    cat > "$firewall_script" <<'EOF'
+}
+
+admin_firewall_is_ready() {
+    local firewall_file='/etc/powerseven/admin-vpn.nft'
+    local firewall_script='/usr/local/lib/powerseven/apply-admin-firewall.sh'
+    local firewall_unit='/etc/systemd/system/powerseven-admin-firewall.service'
+    local wg_dropin='/etc/systemd/system/wg-quick@wg-admin.service.d/powerseven-firewall.conf'
+    local expected installed active
+    [[ -f "$firewall_file" && -x "$firewall_script" && -f "$firewall_unit" && -f "$wg_dropin" ]] || return 1
+    grep -Fxq 'Before=network-pre.target wg-quick@wg-admin.service' "$firewall_unit" || return 1
+    grep -Fxq "ExecStart=$firewall_script" "$firewall_unit" || return 1
+    grep -Fxq 'Requires=powerseven-admin-firewall.service' "$wg_dropin" || return 1
+    grep -Fxq 'After=powerseven-admin-firewall.service' "$wg_dropin" || return 1
+    systemctl is-enabled --quiet powerseven-admin-firewall.service || return 1
+    systemctl is-active --quiet powerseven-admin-firewall.service || return 1
+    expected=$(render_admin_firewall)
+    installed=$(cat "$firewall_file") || return 1
+    [[ "$installed" == "$expected" ]] || return 1
+    active=$(nft list table inet powerseven_admin 2>/dev/null) || return 1
+    [[ "$(printf '%s' "$active" | tr -d '[:space:];"')" == "$(printf '%s' "$expected" | tr -d '[:space:];"')" ]]
+}
+
+ensure_admin_firewall() (
+    local firewall_file='/etc/powerseven/admin-vpn.nft'
+    local firewall_script='/usr/local/lib/powerseven/apply-admin-firewall.sh'
+    local firewall_unit='/etc/systemd/system/powerseven-admin-firewall.service'
+    local wg_dropin='/etc/systemd/system/wg-quick@wg-admin.service.d/powerseven-firewall.conf'
+    local temp_config='' temp_script='' temp_unit='' temp_dropin=''
+    if admin_firewall_is_ready; then return 0; fi
+    trap 'rm -f "$temp_config" "$temp_script" "$temp_unit" "$temp_dropin"' EXIT
+    install -d -m 0750 /etc/powerseven /usr/local/lib/powerseven
+    install -d -m 0755 /etc/systemd/system/wg-quick@wg-admin.service.d
+    temp_config=$(mktemp /etc/powerseven/.admin-vpn.nft.XXXXXX)
+    render_admin_firewall > "$temp_config"
+    if nft list table inet powerseven_admin >/dev/null 2>&1; then
+        { printf 'delete table inet powerseven_admin\n'; cat "$temp_config"; } | nft -c -f -
+    else
+        nft -c -f "$temp_config"
+    fi
+    temp_script=$(mktemp /usr/local/lib/powerseven/.apply-admin-firewall.XXXXXX)
+    cat > "$temp_script" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-nft list table inet powerseven_admin >/dev/null 2>&1 && nft delete table inet powerseven_admin || true
-nft -f /etc/powerseven/admin-vpn.nft
+if nft list table inet powerseven_admin >/dev/null 2>&1; then
+    { printf 'delete table inet powerseven_admin\n'; cat /etc/powerseven/admin-vpn.nft; } | nft -f -
+else
+    nft -f /etc/powerseven/admin-vpn.nft
+fi
 EOF
-    chmod 755 "$firewall_script"
-    cat > "$firewall_unit" <<EOF
+    chmod 755 "$temp_script"
+    temp_unit=$(mktemp /etc/systemd/system/.powerseven-admin-firewall.XXXXXX)
+    cat > "$temp_unit" <<EOF
 [Unit]
 Description=PowerSeven administrative VPN firewall
-After=network-online.target wg-quick@$WG_INTERFACE.service
-Wants=network-online.target
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target wg-quick@$WG_INTERFACE.service
 
 [Service]
 Type=oneshot
@@ -1202,10 +1242,23 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-    chmod 644 "$firewall_unit"
+    chmod 644 "$temp_unit"
+    temp_dropin=$(mktemp /etc/systemd/system/wg-quick@wg-admin.service.d/.powerseven-firewall.XXXXXX)
+    cat > "$temp_dropin" <<'EOF'
+[Unit]
+Requires=powerseven-admin-firewall.service
+After=powerseven-admin-firewall.service
+EOF
+    chmod 644 "$temp_dropin"
+    mv -f "$temp_config" "$firewall_file"
+    mv -f "$temp_script" "$firewall_script"
+    mv -f "$temp_unit" "$firewall_unit"
+    mv -f "$temp_dropin" "$wg_dropin"
     systemctl daemon-reload
-    systemctl enable --now powerseven-admin-firewall.service
-}
+    systemctl enable powerseven-admin-firewall.service
+    systemctl restart powerseven-admin-firewall.service
+    admin_firewall_is_ready || { report FAIL admin-vpn-firewall 'nftables rules did not match the CP3 policy'; return 1; }
+)
 
 ensure_admin_forwarding() {
     local sysctl_file='/etc/sysctl.d/99-powerseven-admin-vpn.conf'
@@ -1221,7 +1274,6 @@ ensure_admin_client_export() (
     peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
     peer_export="/tmp/powerseven-admin-$peer_name.conf"
     trap 'rm -f "${temporary_key:-}" "${temporary_config:-}"' EXIT
-    detect_network_interfaces || { report FAIL admin-vpn 'cannot determine bridged interface for client endpoint'; return 1; }
     if [[ -f "$peer_state" ]]; then
         if [[ -f "$peer_export" ]]; then
             client_private=$(sed -n 's/^PrivateKey = //p' "$peer_export")
@@ -1258,10 +1310,7 @@ ensure_admin_client_export() (
     install -o "$export_uid" -g "$export_gid" -m 600 "$temporary_config" "$peer_export"
     printf '%s\n' "$client_public" > "$peer_state"
     chmod 600 "$peer_state"
-    ensure_wireguard_config
     rm -f "$temporary_key" "$temporary_config"
-    systemctl enable --now "wg-quick@$WG_INTERFACE.service"
-    wg set "$WG_INTERFACE" peer "$client_public" allowed-ips "$peer_address"
     report PASS admin-vpn-client "$peer_name identity created and staged for key-only SCP export"
 )
 
@@ -1298,7 +1347,7 @@ vpn_checkpoint() {
     if [[ "$MODE" == 'apply' ]]; then
         ensure_vpn_packages || return 1
     fi
-    if ! require_commands ip wg wg-quick systemctl sysctl nft install mktemp awk grep; then
+    if ! require_commands ip wg wg-quick systemctl sysctl nft install mktemp awk grep cat tr; then
         return 1
     fi
     if ! detect_network_interfaces; then
@@ -1320,10 +1369,10 @@ vpn_checkpoint() {
         else
             report MISSING admin-vpn-interface "$WG_INTERFACE is not active"
         fi
-        if systemctl is-active --quiet powerseven-admin-firewall.service; then
-            report PASS admin-vpn-firewall 'dedicated bridged ingress firewall is active'
+        if admin_firewall_is_ready; then
+            report PASS admin-vpn-firewall 'persistent unit and loaded nftables rules match the CP3 policy'
         else
-            report MISSING admin-vpn-firewall 'dedicated bridged ingress firewall is not active'
+            report MISSING admin-vpn-firewall 'persistent unit or loaded nftables rules do not match the CP3 policy'
         fi
         if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || printf 0)" == '1' ]]; then
             report PASS admin-vpn-forwarding 'IPv4 forwarding enabled'
@@ -1348,19 +1397,20 @@ vpn_checkpoint() {
         done
         return 0
     fi
+    ensure_admin_firewall
     ensure_wireguard_server_keys
-    ensure_wireguard_config
-    ensure_admin_forwarding
-    systemctl enable --now "wg-quick@$WG_INTERFACE.service"
     for peer in "${ADMIN_PEERS[@]}"; do
         ensure_admin_client_export "${peer%%:*}"
     done
+    ensure_wireguard_config
+    ensure_admin_forwarding
+    systemctl enable --now "wg-quick@$WG_INTERFACE.service"
     for peer in "${ADMIN_PEERS[@]}"; do
         peer_name=${peer%%:*}; peer_address=${peer#*:}
         peer_public=$(tr -d '[:space:]' < "$WG_CLIENT_STATE_DIR/$peer_name.pub")
         wg set "$WG_INTERFACE" peer "$peer_public" allowed-ips "$peer_address"
     done
-    ensure_admin_firewall
+    admin_firewall_is_ready || { report FAIL admin-vpn-firewall 'nftables policy disappeared during CP3 apply'; return 1; }
     report PASS admin-vpn "WireGuard $WG_INTERFACE configured at $ADMIN_SERVER_ADDRESS; bridged ingress is UDP/$WG_PORT only"
 }
 

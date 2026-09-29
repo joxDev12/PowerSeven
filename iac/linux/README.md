@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `7`; ogni modifica
+- il contratto corrente del bootstrap è la versione `11`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - `--protocol` espone versione e capabilities con output deterministico in un
@@ -82,7 +82,11 @@ sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3 --cleanup-client giorgio-la
 Il checkpoint configura `wg-admin` (`10.99.0.1/24`, UDP/51820), forwarding
 IPv4, firewall nftables dedicato e i peer `jarvis` (`10.99.0.2/32`) e
 `giorgio-laptop` (`10.99.0.3/32`). Ogni configurazione client viene
-solo messa in staging protetto per SCP key-only dal runner Windows; dopo la
+generata solo dopo che il firewall nftables è caricato e verificato; l'unità
+WireGuard richiede l'unità firewall anche al boot. Il check confronta le
+regole nftables in esecuzione con la policy attesa.
+Il profilo viene messo in staging protetto per SCP key-only dal runner Windows;
+dopo la
 conferma del trasferimento il file e la chiave privata temporanea vengono
 rimosse da VPS14. Se il peer esiste ma lo staging è perso, il bootstrap rifiuta
 di rigenerare l'identità automaticamente. I client instradano solo

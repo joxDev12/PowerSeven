@@ -353,10 +353,43 @@ def main() -> int:
         report("PASS", "two-peer-vpn-fixtures", "independent allowlisted peers, split tunnel and lost-key safety are declared")
     else:
         report("FAIL", "two-peer-vpn-fixtures", "two-peer VPN state/export/split-tunnel guards are incomplete")
+    cp3_apply = cp3_body.split("    if [[ \"$MODE\" == 'apply' ]]", 1)[-1]
+    cp3_stages = [cp3_apply.rfind(token) for token in (
+        "ensure_admin_firewall", "ensure_wireguard_server_keys", "ensure_admin_client_export",
+        "ensure_wireguard_config", 'systemctl enable --now "wg-quick@$WG_INTERFACE.service"',
+    )]
+    firewall_ready_match = re.search(r"admin_firewall_is_ready\(\) \{(?P<body>.*?)(?=\n\}\n\nensure_admin_firewall\(\))", bootstrap, re.DOTALL)
+    firewall_ready = firewall_ready_match.group("body") if firewall_ready_match else ""
+    if (cp3_match and all(index >= 0 for index in cp3_stages) and cp3_stages == sorted(cp3_stages) and
+            "admin_firewall_is_ready" in cp3_body and
+            "Before=network-pre.target wg-quick@$WG_INTERFACE.service" in bootstrap and
+            "Requires=powerseven-admin-firewall.service" in bootstrap and
+            "After=powerseven-admin-firewall.service" in bootstrap and
+            "nft list table inet powerseven_admin" in firewall_ready and
+            "printf 'delete table inet powerseven_admin\\n'; cat /etc/powerseven/admin-vpn.nft; } | nft -f -" in bootstrap):
+        report("PASS", "cp3-firewall-order", "nft policy precedes VPN start, boot ordering is enforced and Check compares live rules")
+    else:
+        report("FAIL", "cp3-firewall-order", "CP3 firewall ordering, atomic replacement or live-rule check is incomplete")
     if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
         report("FAIL", "windows-runner", "DC02 integration is incomplete")
+    cp3_runner_match = re.search(r"\} elseif \(\$Checkpoint -eq '3' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} else \{\n        \$remoteCheckpointArguments)", runner, re.DOTALL)
+    cp3_runner = cp3_runner_match.group("body") if cp3_runner_match else ""
+    runner_stages = [cp3_runner.find(token) for token in (
+        "Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)",
+        "Invoke-Native $script:Scp", "--cleanup-client", "New-LocalRdpFile",
+        "Ensure-DC02AdminRoute", "Ensure-DC02RdpFirewall",
+    )]
+    if (cp3_runner_match and all(index >= 0 for index in runner_stages) and runner_stages == sorted(runner_stages) and
+            "-RouteMetric 50 -ErrorAction Stop" in runner and
+            "-PolicyStore $store" in runner and
+            "function Test-DC02AdminState" in runner and
+            "if ($Checkpoint -eq '3' -and -not (Test-DC02AdminState))" in runner and
+            "Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow" in runner):
+        report("PASS", "cp3-runner-order", "VPN and profiles precede DC02 changes; Check covers both route stores and RDP scope")
+    else:
+        report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
     cp2_runner_match = re.search(r"if \(\$Checkpoint -eq '2' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} elseif \(\$Checkpoint -eq '3' -and \$Apply\))", runner, re.DOTALL)
     cp2_runner_body = cp2_runner_match.group("body") if cp2_runner_match else ""
     if (cp2_runner_match and
@@ -391,11 +424,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='10'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='11'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '10'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '11'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -420,10 +453,10 @@ def main() -> int:
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 10\ncheckpoints=1,2,3\n", "10", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "10", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "10", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "10", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 11\ncheckpoints=1,2,3\n", "11", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "11", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "11", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "11", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")

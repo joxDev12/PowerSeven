@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '10'
+$requiredBootstrapVersion = '11'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -726,23 +726,38 @@ function Ensure-DC02AdminRoute {
 
     $destination = '10.99.0.0/24'
     $underlay = Get-DC02UnderlayInterface
-    $routes = @(Get-NetRoute -DestinationPrefix $destination -ErrorAction SilentlyContinue)
-    $matching = @($routes | Where-Object { $_.NextHop -eq $Gateway -and $_.InterfaceIndex -eq $underlay.InterfaceIndex })
-    $conflicts = @($routes | Where-Object { $_.NextHop -ne $Gateway -or $_.InterfaceIndex -ne $underlay.InterfaceIndex })
-    if ($conflicts.Count -gt 0) {
-        throw "Conflicting DC02 route already exists for $destination"
+    $stores = @('ActiveStore', 'PersistentStore')
+    $present = @()
+    foreach ($store in $stores) {
+        $routes = @(Get-NetRoute -DestinationPrefix $destination -PolicyStore $store -ErrorAction SilentlyContinue)
+        if ($routes.Count -gt 1 -or @($routes | Where-Object { $_.NextHop -ne $Gateway -or $_.InterfaceIndex -ne $underlay.InterfaceIndex }).Count -gt 0) {
+            throw "Conflicting or duplicate DC02 route exists in $store for $destination"
+        }
+        $present += ($routes.Count -eq 1)
     }
-    if ($matching.Count -gt 1) {
-        throw "Duplicate DC02 routes already exist for $destination"
-    }
-    if ($matching.Count -gt 0) {
-        Write-Result 'PASS' 'dc02-route' "$destination via $Gateway already present"
+    if ($present[0] -and $present[1]) {
+        Write-Result 'PASS' 'dc02-route' "$destination via $Gateway already present in both route stores"
         return @{ Added = $false; Destination = $destination; NextHop = $Gateway; InterfaceIndex = $underlay.InterfaceIndex }
     }
-    New-NetRoute -DestinationPrefix $destination -NextHop $Gateway -InterfaceIndex $underlay.InterfaceIndex -RouteMetric 50 -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
-    $verified = @(Get-NetRoute -DestinationPrefix $destination -ErrorAction Stop |
-        Where-Object { $_.NextHop -eq $Gateway -and $_.InterfaceIndex -eq $underlay.InterfaceIndex })
-    if ($verified.Count -ne 1) { throw "Could not validate persistent DC02 route for $destination" }
+    if ($present[0] -or $present[1]) {
+        $existingStore = if ($present[0]) { 'ActiveStore' } else { 'PersistentStore' }
+        Remove-NetRoute -DestinationPrefix $destination -NextHop $Gateway -InterfaceIndex $underlay.InterfaceIndex -PolicyStore $existingStore -Confirm:$false -ErrorAction Stop
+        Write-Result 'WARN' 'dc02-route' "partial route in $existingStore removed before recreating both stores"
+    }
+    try {
+        New-NetRoute -DestinationPrefix $destination -NextHop $Gateway -InterfaceIndex $underlay.InterfaceIndex -RouteMetric 50 -ErrorAction Stop | Out-Null
+        foreach ($store in $stores) {
+            $verified = @(Get-NetRoute -DestinationPrefix $destination -PolicyStore $store -ErrorAction Stop |
+                Where-Object { $_.NextHop -eq $Gateway -and $_.InterfaceIndex -eq $underlay.InterfaceIndex })
+            if ($verified.Count -ne 1) { throw "Could not validate DC02 route in $store for $destination" }
+        }
+    }
+    catch {
+        foreach ($store in $stores) {
+            Remove-NetRoute -DestinationPrefix $destination -NextHop $Gateway -InterfaceIndex $underlay.InterfaceIndex -PolicyStore $store -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        throw
+    }
     Write-Result 'PASS' 'dc02-route' "$destination via $Gateway created persistently"
     return @{ Added = $true; Destination = $destination; NextHop = $Gateway; InterfaceIndex = $underlay.InterfaceIndex }
 }
@@ -750,12 +765,14 @@ function Ensure-DC02AdminRoute {
 function Remove-DC02AdminRoute {
     param([hashtable]$RouteState)
     if ($null -eq $RouteState -or -not $RouteState.Added) { return }
-    Remove-NetRoute -DestinationPrefix $RouteState.Destination -NextHop $RouteState.NextHop -InterfaceIndex $RouteState.InterfaceIndex -Confirm:$false -ErrorAction SilentlyContinue
+    foreach ($store in @('ActiveStore', 'PersistentStore')) {
+        Remove-NetRoute -DestinationPrefix $RouteState.Destination -NextHop $RouteState.NextHop -InterfaceIndex $RouteState.InterfaceIndex -PolicyStore $store -Confirm:$false -ErrorAction SilentlyContinue
+    }
     Write-Result 'WARN' 'dc02-route' 'new administrative VPN route removed during rollback'
 }
 
 function Get-EnabledRdpFirewallRules {
-    $rules = @(Get-NetFirewallRule -Direction Inbound -Enabled True -ErrorAction Stop)
+    $rules = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction Stop)
     $matchedRules = @()
     foreach ($rule in $rules) {
         $portFilters = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue)
@@ -822,11 +839,56 @@ function Test-AdminClientConfig {
     param([string]$Path, [string]$Address)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $content = Get-Content -LiteralPath $Path -Raw
+    $allowed = [regex]::Matches($content, '(?m)^AllowedIPs = (.+)$')
     return ($content -match '(?m)^\[Interface\]$' -and
         $content -match ("(?m)^Address = {0}$" -f [regex]::Escape($Address)) -and
-        $content -match '(?m)^\[Peer\]$' -and
-        $content -match '(?m)^AllowedIPs = 192\.168\.214\.0/24$' -and
+        [regex]::Matches($content, '(?m)^\[Peer\]$').Count -eq 1 -and
+        $allowed.Count -eq 1 -and $allowed[0].Groups[1].Value -ceq '192.168.214.0/24' -and
+        $content -match '(?m)^Endpoint = \S+:51820$' -and
         $content -match '(?m)^PrivateKey = \S+$')
+}
+
+function Test-DC02AdminState {
+    $ready = $true
+    $underlay = Get-DC02UnderlayInterface
+    foreach ($store in @('ActiveStore', 'PersistentStore')) {
+        $routes = @(Get-NetRoute -DestinationPrefix '10.99.0.0/24' -PolicyStore $store -ErrorAction SilentlyContinue)
+        if ($routes.Count -ne 1 -or $routes[0].NextHop -ne '192.168.214.14' -or $routes[0].InterfaceIndex -ne $underlay.InterfaceIndex) {
+            Write-Result 'MISSING' 'dc02-route' "10.99.0.0/24 via 192.168.214.14 is absent or incorrect in $store"
+            $ready = $false
+        }
+    }
+    $rules = @(Get-EnabledRdpFirewallRules)
+    if ($rules.Count -eq 0) {
+        Write-Result 'MISSING' 'dc02-rdp-firewall' 'no enabled inbound RDP allow rule found'
+        $ready = $false
+    }
+    foreach ($rule in $rules) {
+        $filter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+        $remoteAddresses = @($filter.RemoteAddress)
+        if ($remoteAddresses.Count -ne 1 -or $remoteAddresses[0] -ne '10.99.0.0/24') {
+            Write-Result 'MISSING' 'dc02-rdp-firewall' "RDP rule $($rule.Name) is not restricted to the VPN"
+            $ready = $false
+        }
+    }
+    $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
+    $clientKeys = @()
+    foreach ($peer in @(@{ Name = 'jarvis'; Address = '10.99.0.2/32' }, @{ Name = 'giorgio-laptop'; Address = '10.99.0.3/32' })) {
+        $path = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $peer.Name)
+        if (-not (Test-AdminClientConfig -Path $path -Address $peer.Address)) {
+            Write-Result 'MISSING' 'admin-client' "$($peer.Name) profile is missing or invalid at $path"
+            $ready = $false
+        } else {
+            $content = Get-Content -LiteralPath $path -Raw
+            $clientKeys += [regex]::Match($content, '(?m)^PrivateKey = (\S+)').Groups[1].Value
+        }
+    }
+    if ($clientKeys.Count -eq 2 -and $clientKeys[0] -eq $clientKeys[1]) {
+        Write-Result 'MISSING' 'admin-client' 'Jarvis and laptop profiles share a private key'
+        $ready = $false
+    }
+    if ($ready) { Write-Result 'PASS' 'dc02-admin-state' 'route, RDP scope and distinct client profiles match CP3' }
+    return $ready
 }
 
 function New-LocalRdpFile {
@@ -955,6 +1017,7 @@ if ($Check) {
     $remoteCheck = Invoke-NativeReadOnly $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckArguments)
     if ($remoteCheck.ExitCode -eq 0 -and -not $remoteCheck.HasRemediation) {
         Write-Result 'PASS' 'powerseven-bootstrap' "--check --checkpoint $Checkpoint completed"
+        if ($Checkpoint -eq '3' -and -not (Test-DC02AdminState)) { exit 10 }
         exit 0
     }
     if ($remoteCheck.HasRemediation) {
@@ -1170,7 +1233,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 10\ncheckpoints=1,2,3')"
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 11\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1211,8 +1274,6 @@ sudo rm -rf "$backup" "$stage"
         $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
         New-Item -ItemType Directory -Path $clientDirectory -Force | Out-Null
         Set-RestrictedAcl -Path $clientDirectory -Directory $true
-        $localRouteState = Ensure-DC02AdminRoute
-        $localFirewallState = Ensure-DC02RdpFirewall
     }
 
     $action = if ($Apply) { '--apply' } else { '--check' }
@@ -1375,6 +1436,9 @@ sudo rm -rf "$backup" "$stage"
         }
         $rdpPath = New-LocalRdpFile -Directory $clientDirectory
         Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
+        $localRouteState = Ensure-DC02AdminRoute
+        $localFirewallState = Ensure-DC02RdpFirewall
+        if (-not (Test-DC02AdminState)) { throw 'DC02 administrative VPN state failed final validation' }
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'
     } else {
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
