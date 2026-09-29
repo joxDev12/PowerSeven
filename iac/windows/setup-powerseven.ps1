@@ -1261,6 +1261,48 @@ function Copy-AdminDeliveryFile {
     }
 }
 
+function Get-AdminClientDeliveryFileNames {
+    param([string[]]$PeerNames)
+
+    $seenNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $usedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $normalizedNames = @()
+    foreach ($name in $PeerNames) {
+        if ([string]::IsNullOrWhiteSpace($name)) { throw 'Admin VPN peer name cannot be empty' }
+        $normalizedName = $name.ToLowerInvariant()
+        if (-not $seenNames.Add($normalizedName)) { throw "Duplicate admin VPN peer name: $name" }
+        $normalizedNames += $normalizedName
+    }
+
+    [string[]]$orderedNames = @($normalizedNames)
+    [System.Array]::Sort($orderedNames, [System.StringComparer]::Ordinal)
+    $deliveryNames = @{}
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($normalizedName in $orderedNames) {
+            $slug = [regex]::Replace($normalizedName, '[^a-z0-9]', '')
+            if ($slug.Length -lt 3) { $slug = ($slug + 'peer').Substring(0, 3) }
+            else { $slug = $slug.Substring(0, 3) }
+
+            $uniqueNameFound = $false
+            for ($attempt = 0; $attempt -lt 100; $attempt++) {
+                $hashInput = $normalizedName
+                if ($attempt -gt 0) { $hashInput = "{0}`n{1}" -f $normalizedName, $attempt }
+                $digestBytes = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($hashInput))
+                $digest = [System.BitConverter]::ToString($digestBytes).Replace('-', '').ToLowerInvariant()
+                $interfaceName = 'pw7-{0}-{1}' -f $slug, $digest.Substring(0, 7)
+                if ($usedNames.Add($interfaceName)) { $uniqueNameFound = $true; break }
+            }
+            if (-not $uniqueNameFound) { throw "Could not derive a unique client interface name for peer: $normalizedName" }
+            $deliveryNames[$normalizedName] = "$interfaceName.conf"
+        }
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    return $deliveryNames
+}
+
 function Export-AdminArtifactsToDesktop {
     param([string]$ClientDirectory, [string]$RdpPath, [array]$Peers, [string]$Endpoint, [hashtable]$RdpIdentity)
 
@@ -1287,15 +1329,17 @@ function Export-AdminArtifactsToDesktop {
     }
 
     $expectedFiles = @()
+    $deliveryFileNames = Get-AdminClientDeliveryFileNames -PeerNames @($Peers | ForEach-Object { $_.Name })
     foreach ($peer in $Peers) {
-        $fileName = 'powerseven-admin-{0}.conf' -f $peer.Name
-        $source = Join-Path $ClientDirectory $fileName
+        $canonicalFileName = 'powerseven-admin-{0}.conf' -f $peer.Name
+        $source = Join-Path $ClientDirectory $canonicalFileName
         if (-not [string]::Equals([System.IO.Path]::GetFullPath($peer.Path), [System.IO.Path]::GetFullPath($source), [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Peer profile is outside the canonical client directory: $($peer.Name)"
         }
-        $destination = Join-Path $deliveryDirectory $fileName
+        $deliveryFileName = $deliveryFileNames[$peer.Name]
+        $destination = Join-Path $deliveryDirectory $deliveryFileName
         Copy-AdminDeliveryFile -Source $source -Destination $destination -Address $peer.Address -Endpoint $Endpoint
-        $expectedFiles += $fileName
+        $expectedFiles += $deliveryFileName
     }
 
     $canonicalRdpPath = Join-Path $ClientDirectory 'PowerSeven-DC02.rdp'
@@ -1304,10 +1348,13 @@ function Export-AdminArtifactsToDesktop {
     }
     Copy-AdminDeliveryFile -Source $canonicalRdpPath -Destination (Join-Path $deliveryDirectory 'PowerSeven-DC02.rdp') -RdpIdentity $RdpIdentity
 
-    $staleProfiles = @(Get-ChildItem -LiteralPath $deliveryDirectory -Filter 'powerseven-admin-*.conf' -File -ErrorAction Stop |
-        Where-Object { $expectedFiles -notcontains $_.Name })
+    $staleProfiles = @(Get-ChildItem -LiteralPath $deliveryDirectory -File -ErrorAction Stop |
+        Where-Object {
+            ($_.Name -match '^powerseven-admin-[a-z][a-z0-9_-]{0,31}\.conf$' -or $_.Name -match '^pw7-[a-z0-9]{3}-[0-9a-f]{7}\.conf$') -and
+            $expectedFiles -notcontains $_.Name
+        })
     foreach ($staleProfile in $staleProfiles) {
-        Write-Result 'WARN' 'desktop-stale-profile' "left untouched because it is not in the current peer inventory: $($staleProfile.Name)"
+        Write-Result 'WARN' 'desktop-stale-profile' "legacy or stale delivery name left untouched: $($staleProfile.Name)"
     }
     Write-Result 'PASS' 'desktop-export' ("{0} validated delivery files copied to {1}; canonical files remain in {2}" -f ($Peers.Count + 1), $deliveryDirectory, $ClientDirectory)
 }

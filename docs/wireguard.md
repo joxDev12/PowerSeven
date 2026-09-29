@@ -41,6 +41,11 @@ Il runner da DC02 aggiunge la route persistente `10.99.0.0/24 via
 `C:\ProgramData\PowerSeven\clients\`. Ogni computer usa il proprio file client;
 ogni Apply CP3 riuscito copia i profili validati e `PowerSeven-DC02.rdp` anche
 in `Desktop\PowerSeven-Clients` dell'utente Windows che esegue il runner.
-La cartella ProgramData resta la copia canonica.
+La cartella ProgramData resta la copia canonica, con i nomi
+`powerseven-admin-{peer}.conf`. Le copie Desktop usano invece nomi sicuri per
+NetworkManager/Linux, `pw7-{slug}-{hash}.conf`: il basename prima di `.conf`
+resta entro 15 caratteri ASCII ed è derivato in modo deterministico dal peer.
+I vecchi file Desktop `powerseven-admin-{peer}.conf` sono segnalati come
+obsoleti e lasciati intatti; non viene cancellato alcun file stale.
 PowerSeven non orchestra WireGuard su Fedora;
 masquerade resta solo fallback, non configurazione normale.

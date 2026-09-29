@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import os
 import re
@@ -283,6 +284,7 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
     )
     copy_body = copy_match.group("body") if copy_match else ""
     export_body = export_match.group("body") if export_match else ""
+    name_helper = re.search(r"function Get-AdminClientDeliveryFileNames \{.*?(?=\n\}\n\nfunction Export-AdminArtifactsToDesktop)", runner, re.DOTALL)
     local_rdp = re.search(r"function Test-LocalRdpFile \{(?P<body>.*?)(?=\n\}\n\nfunction New-LocalRdpFile)", runner, re.DOTALL)
     apply_order = [cp3_apply.find(token) for token in (
         "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers",
@@ -290,7 +292,7 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
         "Export-AdminArtifactsToDesktop -ClientDirectory $clientDirectory",
     )]
     if not (
-        copy_match and export_match and local_rdp and runner.count("Export-AdminArtifactsToDesktop") == 2 and
+        copy_match and export_match and local_rdp and name_helper and runner.count("Export-AdminArtifactsToDesktop") == 2 and
         "[System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::DesktopDirectory)" in export_body and
         "Join-Path $desktopDirectory 'PowerSeven-Clients'" in export_body and
         "C:\\Users\\Administrator\\Desktop" not in runner and
@@ -305,16 +307,100 @@ def desktop_delivery_fixture(runner: str, cp3_apply: str) -> bool:
         "Test-AdminClientConfig -Path $Destination" in copy_body and
         "Test-LocalRdpFile -Path $temporaryPath -Identity $RdpIdentity" in copy_body and
         "Test-LocalRdpFile -Path $Destination -Identity $RdpIdentity" in copy_body and
+        "Get-AdminClientDeliveryFileNames -PeerNames @($Peers | ForEach-Object { $_.Name })" in export_body and
         "'powerseven-admin-{0}.conf' -f $peer.Name" in export_body and
-        "Join-Path $ClientDirectory $fileName" in export_body and
+        "Join-Path $ClientDirectory $canonicalFileName" in export_body and
+        "$deliveryFileNames[$peer.Name]" in export_body and
         "PowerSeven-DC02.rdp" in export_body and
-        "left untouched because it is not in the current peer inventory" in export_body and
+        "legacy or stale delivery name left untouched" in export_body and
+        "^powerseven-admin-[a-z][a-z0-9_-]{0,31}\\.conf$" in export_body and
+        "^pw7-[a-z0-9]{3}-[0-9a-f]{7}\\.conf$" in export_body and
         "Remove-Item -LiteralPath $staleProfile" not in export_body and
         apply_order == sorted(apply_order) and min(apply_order) >= 0 and
         cp3_apply.count("Export-AdminArtifactsToDesktop") == 1
     ):
         return False
     return True
+
+
+def client_delivery_filename_map(names: list[str], digest_fn=None) -> dict[str, str] | None:
+    digest_fn = digest_fn or (lambda value: hashlib.sha256(value.encode("utf-8")).hexdigest())
+    normalized = [name.lower() for name in names]
+    if any(not name.strip() for name in names) or len(set(normalized)) != len(normalized):
+        return None
+    result: dict[str, str] = {}
+    used: set[str] = set()
+    for name in sorted(normalized):
+        slug = re.sub("[^a-z0-9]", "", name)
+        slug = (slug + "peer")[:3]
+        for attempt in range(100):
+            hash_input = name if attempt == 0 else f"{name}\n{attempt}"
+            interface_name = f"pw7-{slug}-{digest_fn(hash_input)[:7]}"
+            if interface_name.casefold() not in used:
+                used.add(interface_name.casefold())
+                result[name] = f"{interface_name}.conf"
+                break
+        else:
+            return None
+    return result
+
+
+def client_delivery_filename_fixture(runner: str) -> bool:
+    helper_match = re.search(
+        r"function Get-AdminClientDeliveryFileNames \{(?P<body>.*?)(?=\n\}\n\nfunction Export-AdminArtifactsToDesktop)",
+        runner,
+        re.DOTALL,
+    )
+    helper = helper_match.group("body") if helper_match else ""
+    normal = client_delivery_filename_map(["jarvis", "giorgio-laptop"])
+    expected = {
+        "jarvis": "pw7-jar-dda8201.conf",
+        "giorgio-laptop": "pw7-gio-27e922e.conf",
+    }
+    short_name = client_delivery_filename_map(["a"])
+    long_name = "extremely-long-name-for-a-remote-workstation-with-many-details"
+    messy_name = "Very Long / Peer!"
+    colliding_slug_names = ["very-long-peer-alpha", "very-long-peer-beta"]
+
+    def force_first_collision(value: str) -> str:
+        return hashlib.sha256(value.encode()).hexdigest() if "\n" in value else "a" * 64
+
+    forced_collision = client_delivery_filename_map(colliding_slug_names, force_first_collision)
+    all_names = client_delivery_filename_map([long_name, messy_name])
+    truncation_collisions = client_delivery_filename_map(colliding_slug_names)
+    names_are_safe = lambda mapping: bool(mapping) and all(
+        re.fullmatch(r"pw7-[a-z0-9]{3}-[0-9a-f]{7}\.conf", filename)
+        and len(filename[:-5].encode("ascii")) <= 15
+        for filename in mapping.values()
+    )
+    return bool(
+        helper_match and
+        all(token in helper for token in (
+            "ToLowerInvariant()", "OrdinalIgnoreCase", "[regex]::Replace($normalizedName, '[^a-z0-9]', '')",
+            "SHA256]::Create()", "ComputeHash(", "Substring(0, 7)",
+            "for ($attempt = 0; $attempt -lt 100; $attempt++)", "$usedNames.Add($interfaceName)",
+            '"$interfaceName.conf"',
+        )) and
+        normal == expected and normal == client_delivery_filename_map(["JARVIS", "Giorgio-Laptop"]) and
+        short_name == {"a": "pw7-ape-ca97811.conf"} and names_are_safe(short_name) and
+        names_are_safe(all_names) and
+        all_names == {
+            long_name: "pw7-ext-3876dc4.conf",
+            messy_name.lower(): "pw7-ver-3d5a058.conf",
+        } and
+        truncation_collisions == {
+            "very-long-peer-alpha": "pw7-ver-44e0c84.conf",
+            "very-long-peer-beta": "pw7-ver-1c07fa5.conf",
+        } and
+        forced_collision and len(set(forced_collision.values())) == 2 and
+        forced_collision == {
+            "very-long-peer-alpha": "pw7-ver-aaaaaaa.conf",
+            "very-long-peer-beta": "pw7-ver-1dd693f.conf",
+        } and
+        forced_collision[colliding_slug_names[0]] != forced_collision[colliding_slug_names[1]] and
+        client_delivery_filename_map(["Jarvis", "jarvis"]) is None and
+        client_delivery_filename_map(["jarvis", "giorgio-laptop"]) == normal
+    )
 
 
 def rdp_identity_fixture(logon_name: str) -> tuple[str, str] | None:
@@ -878,6 +964,10 @@ def main() -> int:
         report("PASS", "cp3-desktop-delivery", "validated canonical files sync to the current user's Desktop with restricted ACLs; Check and stale files are independent")
     else:
         report("FAIL", "cp3-desktop-delivery", "Desktop delivery is missing, unsafe, hardcoded or coupled to Check/canonical state")
+    if client_delivery_filename_fixture(runner):
+        report("PASS", "cp3-client-filenames", "client filenames stay within Linux's 15-byte interface limit and remain unique after sanitization/collisions")
+    else:
+        report("FAIL", "cp3-client-filenames", "client-safe filename derivation or edge-case fixtures failed")
     if rdp_identity_fixtures(runner):
         report("PASS", "cp3-rdp-identity", "RDP username/domain are derived from the current authenticated Windows identity and validated separately")
     else:

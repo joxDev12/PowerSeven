@@ -105,8 +105,12 @@ poi li copia insieme a `PowerSeven-DC02.rdp` nella cartella
 hanno ACL ristrette; ProgramData resta la source of truth e Check non dipende
 dalla cartella Desktop. Il profilo RDP separa `username` e `domain`, ricavati
 dall'identità Windows autenticata che esegue Apply; non contiene password. I
-file con nomi di peer non più presenti sono segnalati e lasciati intatti.
-Importare ogni profilo solo sul dispositivo corrispondente.
+file con nomi delivery non più correnti sono segnalati e lasciati intatti. I
+profili canonici mantengono `powerseven-admin-{peer}.conf`; le copie Desktop
+usano `pw7-{slug}-{hash}.conf`, con un basename ASCII di massimo 15 caratteri
+per l'import diretto in NetworkManager/Linux. I vecchi nomi delivery sono
+segnalati come obsoleti e non vengono cancellati. Importare ogni profilo solo
+sul dispositivo corrispondente.
 La generazione resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
 importa solo il proprio client WireGuard. Codex usa la VPN del computer corrente.
 I file client sono secret locali e non entrano nel repository.

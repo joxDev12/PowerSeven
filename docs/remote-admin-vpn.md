@@ -106,10 +106,15 @@ i profili peer attivi e l'RDP in `PowerSeven-Clients` sul Desktop fisico
 dell'utente Windows corrente, risolto tramite la cartella speciale di .NET.
 Le copie ricevono ACL ristrette e vengono validate dopo la scrittura; Check
 non dipende dal Desktop. Ogni rerun aggiorna solo i nomi attesi dal peer
-inventory. Profili di peer non più presenti vengono segnalati e lasciati
-intatti, così PowerSeven non cancella file dell'utente. Il file RDP separa i
+inventory. I profili PowerSeven con un nome delivery non più corrente vengono
+segnalati e lasciati intatti, così PowerSeven non cancella file dell'utente. Il file RDP separa i
 campi `username` e `domain` derivandoli dall'identità Windows autenticata che
 esegue Apply; non memorizza password.
+I profili canonici mantengono `powerseven-admin-{peer}.conf`; le copie Desktop
+usano `pw7-{slug}-{hash}.conf`, con un basename ASCII di massimo 15 caratteri
+compatibile con l'interfaccia Linux richiesta da `nmcli connection import`.
+I vecchi file Desktop `powerseven-admin-{peer}.conf` vengono segnalati come
+obsoleti e lasciati intatti.
 
 Le private key distinte non vengono stampate o versionate. VPS14 conserva solo
 le public key dopo l'export; dopo ogni SCP validato il runner elimina lo
