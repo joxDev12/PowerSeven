@@ -64,6 +64,11 @@ Il firewall viene caricato prima dell'avvio di WireGuard, con dipendenza
 systemd anche ai reboot. `-Check -Checkpoint 3` verifica le regole nftables
 effettive, oltre alla configurazione persistente. Il runner completa VPN,
 export e pulizia dei profili prima di modificare route e filtro RDP su DC02.
+Su DC02 Apply rende poi effettivo Remote Desktop solo dopo aver validato la
+policy firewall VPN: abilita il protocollo, avvia i servizi RDP necessari e
+verifica il listener IPv4 TCP/3389 associato a `TermService`. Check ripete
+queste verifiche senza modificare lo stato. NLA e il tipo di avvio dei servizi
+restano invariati.
 
 Al primo Apply su una nuova installazione il runner chiede quanti dispositivi
 creare e un nome per ciascuno. Per automazione accetta

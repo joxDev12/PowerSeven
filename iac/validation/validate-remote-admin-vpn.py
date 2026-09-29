@@ -349,6 +349,90 @@ def native_output_isolation_fixture(runner: str) -> bool:
     )
 
 
+def rdp_readiness_fixture(state: dict) -> bool:
+    return (
+        state["fdeny"] == 0 and state["policy_deny"] in (None, 0) and
+        state["winstation_enabled"] == 1 and state["port"] == 3389 and
+        state["services"] == {"TermService": "Running", "UmRdpService": "Running"} and
+        any(pid == state["term_pid"] and address in ("0.0.0.0", "192.168.214.13")
+            for address, pid in state["listeners"])
+    )
+
+
+def rdp_operability_fixtures(runner: str, cp3_apply: str) -> bool:
+    readiness_match = re.search(
+        r"function Test-DC02RdpReadiness \{(?P<body>.*?)(?=\n\}\n\nfunction Ensure-DC02RdpOperational)",
+        runner,
+        re.DOTALL,
+    )
+    ensure_match = re.search(
+        r"function Ensure-DC02RdpOperational \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)",
+        runner,
+        re.DOTALL,
+    )
+    admin_match = re.search(
+        r"function Test-DC02AdminState \{(?P<body>.*?)(?=\n\}\n\nfunction Test-LocalRdpFile)",
+        runner,
+        re.DOTALL,
+    )
+    check_match = re.search(
+        r"^if \(\$Check\) \{(?P<body>.*?)\n\}\n\nWrite-Result 'INFO' 'ssh-key-auth'",
+        runner,
+        re.MULTILINE | re.DOTALL,
+    )
+    readiness_body = readiness_match.group("body") if readiness_match else ""
+    ensure_body = ensure_match.group("body") if ensure_match else ""
+    admin_body = admin_match.group("body") if admin_match else ""
+    check_body = check_match.group("body") if check_match else ""
+    order = [cp3_apply.find(token) for token in (
+        "Ensure-DC02RdpFirewall",
+        "Ensure-DC02RdpOperational",
+        "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers",
+    )]
+    state = {
+        "fdeny": 0,
+        "policy_deny": None,
+        "winstation_enabled": 1,
+        "port": 3389,
+        "services": {"TermService": "Running", "UmRdpService": "Running"},
+        "term_pid": 4321,
+        "listeners": [("0.0.0.0", 4321)],
+    }
+    cases = [(state, True)]
+    for key, value in (
+        ("fdeny", 1), ("policy_deny", 1), ("winstation_enabled", 0), ("port", 3390),
+        ("services", {"TermService": "Stopped", "UmRdpService": "Running"}),
+        ("services", {"TermService": "Running", "UmRdpService": "Stopped"}),
+        ("listeners", []), ("listeners", [("0.0.0.0", 9999)]), ("listeners", [("::", 4321)]),
+    ):
+        invalid = state.copy()
+        invalid[key] = value
+        cases.append((invalid, False))
+    fixture_ok = all(rdp_readiness_fixture(case) is expected for case, expected in cases)
+    return bool(
+        readiness_match and ensure_match and admin_match and check_match and fixture_ok and
+        "fDenyTSConnections" in readiness_body and "fEnableWinStation" in readiness_body and
+        "PortNumber" in readiness_body and "fDenyTSConnections" in ensure_body and
+        "fEnableWinStation' -Value 1" in ensure_body and "PortNumber' -Value 3389" in ensure_body and
+        "fDenyTSConnections' -Value 0" in ensure_body and
+        "SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services" in readiness_body and
+        "SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services" in ensure_body and
+        "Start-Service -Name 'TermService'" in ensure_body and
+        "Start-Service -Name 'UmRdpService'" in ensure_body and
+        "if ((Get-Service -Name 'UmRdpService' -ErrorAction Stop).Status -ne 'Running')" in ensure_body and
+        "StartMode -eq 'Disabled'" in ensure_body and
+        ensure_body.find("StartMode -eq 'Disabled'") < ensure_body.find("Set-ItemProperty") and
+        "Get-NetTCPConnection -LocalPort 3389 -State Listen" in readiness_body and
+        "$_.OwningProcess -eq $termService.ProcessId" in readiness_body and
+        "Get-Service -Name @('TermService', 'UmRdpService')" in readiness_body and
+        "Test-DC02RdpReadiness" in admin_body and "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers" in check_body and
+        order == sorted(order) and min(order) >= 0 and
+        "Set-Service" not in ensure_body and "StartupType" not in ensure_body and
+        "UserAuthentication" not in ensure_body and
+        "Get-NetFirewallRule -DisplayGroup 'Remote Desktop'" not in ensure_body
+    )
+
+
 def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
     try:
         ranges = []
@@ -707,7 +791,8 @@ def main() -> int:
     runner_stages = [cp3_runner.find(token) for token in (
         "Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)",
         "Invoke-Native $script:Scp", "--cleanup-client", "New-LocalRdpFile",
-        "Ensure-DC02AdminRoute", "Ensure-DC02RdpFirewall",
+        "Ensure-DC02AdminRoute", "Ensure-DC02RdpFirewall", "Ensure-DC02RdpOperational",
+        "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers",
     )]
     if (cp3_runner_match and all(index >= 0 for index in runner_stages) and runner_stages == sorted(runner_stages) and
             "-RouteMetric 50 -ErrorAction Stop" in runner and
@@ -715,7 +800,7 @@ def main() -> int:
             "function Test-DC02AdminState" in runner and
             "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers" in runner and
             "Test-DC02RdpFirewall" in runner):
-        report("PASS", "cp3-runner-order", "VPN and profiles precede DC02 changes; Check covers both route stores and RDP scope")
+        report("PASS", "cp3-runner-order", "VPN profiles and firewall precede RDP enablement; Check covers route, firewall and client scope")
     else:
         report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
     desktop_delivery_ok = desktop_delivery_fixture(runner, cp3_runner)
@@ -727,7 +812,7 @@ def main() -> int:
         report("PASS", "native-output-isolation", "Invoke-Native displays stdout without leaking it through scalar-return helpers such as New-LocalRdpFile")
     else:
         report("FAIL", "native-output-isolation", "native stdout can contaminate PowerShell helper return values")
-    rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)", runner, re.DOTALL)
+    rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-DC02RdpReadiness)", runner, re.DOTALL)
     rdp_body = rdp_match.group("body") if rdp_match else ""
     block4 = rdp_body.find("New-NetFirewallRule -Name $blockIPv4Name")
     block6 = rdp_body.find("New-NetFirewallRule -Name $blockIPv6Name")
@@ -747,6 +832,10 @@ def main() -> int:
         report("PASS", "cp3-rdp-policy", "valid IPv4/IPv6 blocks precede allow; active policy and fail-closed rerun are checked")
     else:
         report("FAIL", "cp3-rdp-policy", "RDP policy may depend on existing rules or leave a broad allow active")
+    if rdp_operability_fixtures(runner, cp3_runner):
+        report("PASS", "cp3-rdp-operational", "Apply enables RDP after firewall; Check requires enabled protocol, services and TermService-owned IPv4 TCP/3389 listener")
+    else:
+        report("FAIL", "cp3-rdp-operational", "RDP operational state or firewall-before-listener ordering is not fully verified")
     if ("function Get-FirewallAddressIdentity" in runner and "function Test-FirewallAddressSet" in runner and
             "IPAddress]::TryParse" in runner and "GetAddressBytes()" in runner and
             "@([regex]::Split($token, '-', 3))" in runner and "Non-contiguous firewall subnet mask" in runner and

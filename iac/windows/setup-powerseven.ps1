@@ -926,6 +926,89 @@ function Ensure-DC02RdpFirewall {
     Write-Result 'PASS' 'dc02-rdp-firewall' 'managed IPv4/IPv6 TCP/3389 blocks outside VPN and allow from 10.99.0.0/24 are effective'
 }
 
+function Test-DC02RdpReadiness {
+    $terminalServerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+    $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+    $listenerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+    $terminalSettings = Get-ItemProperty -LiteralPath $terminalServerPath -Name 'fDenyTSConnections' -ErrorAction SilentlyContinue
+    if ($null -eq $terminalSettings -or [int]$terminalSettings.fDenyTSConnections -ne 0) { return $false }
+    $policySettings = Get-ItemProperty -LiteralPath $policyPath -Name 'fDenyTSConnections' -ErrorAction SilentlyContinue
+    $policyValue = if ($null -ne $policySettings) { $policySettings.PSObject.Properties['fDenyTSConnections'] } else { $null }
+    if ($null -ne $policyValue -and [int]$policyValue.Value -ne 0) { return $false }
+
+    $listenerSettings = Get-ItemProperty -LiteralPath $listenerPath -Name @('fEnableWinStation', 'PortNumber') -ErrorAction SilentlyContinue
+    $listenerEnabled = if ($null -ne $listenerSettings) { $listenerSettings.PSObject.Properties['fEnableWinStation'] } else { $null }
+    $listenerPort = if ($null -ne $listenerSettings) { $listenerSettings.PSObject.Properties['PortNumber'] } else { $null }
+    if ($null -eq $listenerEnabled -or $null -eq $listenerPort -or [int]$listenerEnabled.Value -ne 1 -or [int]$listenerPort.Value -ne 3389) { return $false }
+    $services = @(Get-Service -Name @('TermService', 'UmRdpService') -ErrorAction SilentlyContinue)
+    if ($services.Count -ne 2 -or @($services | Where-Object { $_.Status -ne 'Running' }).Count -gt 0) { return $false }
+
+    $termService = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'TermService'" -ErrorAction SilentlyContinue
+    if ($null -eq $termService -or $termService.State -ne 'Running' -or [int]$termService.ProcessId -le 0) { return $false }
+    $listeners = @(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.OwningProcess -eq $termService.ProcessId -and $_.LocalAddress -in @('0.0.0.0', '192.168.214.13') })
+    return ($listeners.Count -gt 0)
+}
+
+function Ensure-DC02RdpOperational {
+    if (-not (Test-DC02RdpFirewall)) { throw 'Refusing to enable RDP before the VPN-only firewall policy is effective' }
+
+    $terminalServerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
+    $policyPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+    $listenerPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+    $policySettings = Get-ItemProperty -LiteralPath $policyPath -Name 'fDenyTSConnections' -ErrorAction SilentlyContinue
+    $policyValue = if ($null -ne $policySettings) { $policySettings.PSObject.Properties['fDenyTSConnections'] } else { $null }
+    if ($null -ne $policyValue -and [int]$policyValue.Value -ne 0) {
+        throw 'Group Policy disables Remote Desktop; resolve the policy instead of overriding it locally'
+    }
+
+    $terminalSettings = Get-ItemProperty -LiteralPath $terminalServerPath -Name 'fDenyTSConnections' -ErrorAction Stop
+    $listenerSettings = Get-ItemProperty -LiteralPath $listenerPath -Name @('fEnableWinStation', 'PortNumber') -ErrorAction Stop
+    $termService = Get-Service -Name 'TermService' -ErrorAction Stop
+    $termServiceConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'TermService'" -ErrorAction Stop
+    $portRedirector = Get-Service -Name 'UmRdpService' -ErrorAction Stop
+    $portRedirectorConfig = Get-CimInstance -ClassName Win32_Service -Filter "Name = 'UmRdpService'" -ErrorAction Stop
+    if ($null -eq $termServiceConfig -or $null -eq $portRedirectorConfig) {
+        throw 'Remote Desktop service configuration is unavailable'
+    }
+    if ($termServiceConfig.StartMode -eq 'Disabled' -or $portRedirectorConfig.StartMode -eq 'Disabled') {
+        throw 'A required Remote Desktop service is disabled; refusing to override its service policy'
+    }
+
+    $configurationChanged = $false
+    if ([int]$terminalSettings.fDenyTSConnections -ne 0) {
+        Set-ItemProperty -LiteralPath $terminalServerPath -Name 'fDenyTSConnections' -Value 0 -ErrorAction Stop | Out-Null
+        $configurationChanged = $true
+    }
+    if ([int]$listenerSettings.fEnableWinStation -ne 1) {
+        Set-ItemProperty -LiteralPath $listenerPath -Name 'fEnableWinStation' -Value 1 -ErrorAction Stop | Out-Null
+        $configurationChanged = $true
+    }
+    if ([int]$listenerSettings.PortNumber -ne 3389) {
+        Set-ItemProperty -LiteralPath $listenerPath -Name 'PortNumber' -Value 3389 -ErrorAction Stop | Out-Null
+        $configurationChanged = $true
+    }
+
+    # Preserve Windows' configured start modes; CP3 starts the services after firewall validation.
+    if ($configurationChanged -and $termService.Status -eq 'Running') {
+        Restart-Service -Name 'TermService' -Force -ErrorAction Stop
+    } elseif ($termService.Status -ne 'Running') {
+        Start-Service -Name 'TermService' -ErrorAction Stop
+    }
+    if ((Get-Service -Name 'UmRdpService' -ErrorAction Stop).Status -ne 'Running') {
+        Start-Service -Name 'UmRdpService' -ErrorAction Stop
+    }
+
+    $ready = $false
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (Test-DC02RdpReadiness) { $ready = $true; break }
+        Start-Sleep -Seconds 1
+    }
+    if (-not $ready) { $ready = Test-DC02RdpReadiness }
+    if (-not $ready) { throw 'Remote Desktop did not become ready with TermService-owned TCP/3389 listener' }
+    Write-Result 'PASS' 'dc02-rdp-service' 'Remote Desktop enabled; required services and TermService-owned TCP/3389 listener are running'
+}
+
 function Test-AdminClientConfig {
     param([string]$Path, [string]$Address, [string]$Endpoint = '', [switch]$AllowLegacyRoutes)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
@@ -1067,6 +1150,10 @@ function Test-DC02AdminState {
     }
     if (-not (Test-DC02RdpFirewall)) {
         Write-Result 'MISSING' 'dc02-rdp-firewall' 'managed RDP block/allow policy is absent or ineffective'
+        $ready = $false
+    }
+    if (-not (Test-DC02RdpReadiness)) {
+        Write-Result 'MISSING' 'dc02-rdp-service' 'Remote Desktop is disabled, required services are stopped, or the TermService TCP/3389 listener is absent'
         $ready = $false
     }
     $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
@@ -1769,6 +1856,7 @@ sudo rm -rf "$backup" "$stage"
         Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
         $localRouteState = Ensure-DC02AdminRoute
         Ensure-DC02RdpFirewall
+        Ensure-DC02RdpOperational
         if (-not (Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers)) { throw 'DC02 administrative VPN state failed final validation' }
         $localRouteState.Added = $false
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'

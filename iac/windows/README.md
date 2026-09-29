@@ -113,8 +113,12 @@ VPS14 e aggiorna `Endpoint` nei profili locali senza cambiare le private key;
 se il lease cambia dopo l'import sui client, ridistribuire i profili aggiornati.
 Il runner configura prima la VPN ed esporta i profili,
 poi aggiunge la route e le tre regole RDP gestite su DC02 (blocco IPv4/IPv6,
-allow VPN). `-Check -Checkpoint
-3` controlla anche route attiva/persistente, regole RDP e profili distinti.
+allow VPN). `-Apply -Checkpoint 3` abilita Remote Desktop solo dopo aver
+verificato la policy firewall VPN, avvia `TermService` e `UmRdpService` e
+attende il listener TCP/3389 posseduto da `TermService`. Mantiene lo startup
+configurato da Windows e non modifica NLA. `-Check -Checkpoint 3` verifica
+route attiva/persistente, regole RDP, protocollo, servizi, listener e profili
+distinti; una policy che vieta RDP o un listener assente impediscono il PASS.
 
 ## Dichiarazioni e secret
 
