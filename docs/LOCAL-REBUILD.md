@@ -197,13 +197,36 @@ le password non vengono versionate.
   integrato con l'inoltro VPN CP3 e file runtime Compose root-owned. Check
   distingue pacchetti, config, reti, volumi, container, health, porte e DB.
 - **Limite attuale:** i container applicativi non vengono avviati. Il Compose
-  usa image tag/secret placeholder, database host PostgreSQL/MariaDB assenti,
-  manca la configurazione LDAP completa e service-control non ha un installer
-  locale coerente. Questi servizi richiedono una milestone successiva.
-- **Gate LIVE:** Docker segnala che le regole firewall create direttamente con
-  `nft` non sono supportate insieme al suo backend standard `iptables-nft`;
-  prima di distribuire le app, il test CP4 isolato deve confermare route VPN,
-  RDP e isolamento della NIC Bridged.
+  usa image tag/secret placeholder; CP5 prepara i database host ma non i login
+  applicativi; manca ancora la configurazione LDAP completa e service-control
+  non ha un installer locale coerente.
+- **Stato:** CP4 è LIVE VALIDATED in Apply e Check; Docker, storage e regole
+  `DOCKER-USER` sono PASS e VPN/RDP sono rimasti funzionanti. Il test ha
+  confermato che le regole CP3 nftables sono compatibili con il backend Docker
+  `iptables-nft` usato dal progetto.
+
+### MILESTONE CP5 — database foundation VPS14
+
+- **Modalità:** runner PowerShell su DC02, `-Apply -Checkpoint 5`; Check è
+  read-only e richiede CP1–CP4 già validati.
+- **Risultato implementato:** PostgreSQL 18.6 e MariaDB 10.11.14 su VPS14;
+  database vuoti `forgejo`, `nextcloud` e `panel`; database standard `postgres`
+  verificato; storage nei path standard sul root persistente CP1.
+- **Bind e protezione:** loopback più `192.168.214.14` sulle porte 5432/3306;
+  CP3 continua a bloccare l'ingresso dalla NIC Bridged. Amministrazione solo
+  tramite PostgreSQL peer e MariaDB `unix_socket`; nessun login DB applicativo
+  o secret viene creato.
+- **Sicurezza rerun:** candidate pacchetto versionato, nessun upgrade, nessun
+  cluster PostgreSQL estraneo, database esistenti preservati e creazione solo
+  dei database mancanti. Check verifica servizio, versione, cluster, bind,
+  listener, storage, autenticazione, database e policy; segnala anche le socket
+  correnti sulla porta 53 senza cambiare DNS.
+- **Stato:** implementazione statica pronta; primo Apply/Check LIVE CP5 ancora
+  da eseguire. Nessuna VM è stata modificata durante l'implementazione.
+- **Resta prima delle applicazioni:** definire nomi ruoli/database applicativi,
+  grants e password, policy DB per le reti container, secret locali,
+  configurazioni/immagini applicative, Redis, LDAP/LDAPS, certificati,
+  AdGuard e installazione del service-control.
 
 ### PHASE 7 — VPS12 desktop/client
 
@@ -272,12 +295,12 @@ le password non vengono versionate.
 | Area | Classificazione | Evidenza reale |
 |---|---|---|
 | `iac/vmware/` | A + B | `preflight-host` e `validate-vms` sono read-only eseguibili; YAML e path example sono dichiarativi. Creazione VM intenzionalmente assente. |
-| `iac/linux/` | A parziale + B/C | `bootstrap.sh` implementa CP1 storage, CP2 rete, CP3 VPN e CP4 Docker foundation. Autoinstall/cloud-init restano template con input segreti non renderizzati; database e servizi applicativi restano incompleti. |
+| `iac/linux/` | A parziale + B/C | `bootstrap.sh` implementa CP1 storage, CP2 rete, CP3 VPN, CP4 Docker e CP5 database foundation. Autoinstall/cloud-init restano template con input segreti non renderizzati; ruoli DB e servizi applicativi restano incompleti. |
 | `iac/windows/` | A + B | `bootstrap.ps1` implementa checkpoint 1-8 ed è stato validato live su VPS13; `validate-vps13.ps1` è read-only; `autounattend.xml` resta input installer. Ansible Windows non è completo. |
 | `iac/ansible/` | A limitata + B/C | playbook e inventory sono invocabili come struttura; `check.yml` è un check contract; solo `roles/wazuh_server/tasks/main.yml` contiene task reali, gli altri role sono README. |
 | `iac/docker/` | B/C | Compose è catalogo runtime distribuito da CP4 ma usa immagini/secret placeholder; non è un deployment completo né include tutti i servizi host live. |
 | `iac/service-control/` | A runtime/static + B | controller Python e validator sono eseguibili; unità systemd e YAML sono template di installazione, non un installer. |
-| `iac/validation/` | A read-only | `preflight` controlla YAML/JSON, grafo, rete, secret pattern, cicli, porte, VM, Compose e contract CP4. |
+| `iac/validation/` | A read-only | `preflight` controlla YAML/JSON, grafo, rete, secret pattern, cicli, porte, VM, Compose e contract CP4/CP5. |
 | `iac/inventory/` | B | cataloghi dichiarativi di host, rete, DNS, servizi, storage e ordine; nessun apply. |
 | `iac/versions.yml` | B/C | matrice di policy; molte versioni e checksum sono ancora `REQUIRED_DECISION`. |
 
@@ -286,10 +309,10 @@ le password non vengono versionate.
 | Componente | Stato attuale | Mancante | Prossima implementazione |
 |---|---|---|---|
 | VM VMware | GUI + validator read-only | nessun create API, per scelta | checklist GUI e usare `validate-vms` |
-| Ubuntu bootstrap | CP1 storage, CP2 rete, CP3 WireGuard e CP4 Docker foundation automatizzati | servizi host e deploy applicazioni | testare CP4 su un'installazione isolata Ubuntu Server 24.04.4 |
+| Ubuntu bootstrap | CP1 storage, CP2 rete, CP3 WireGuard, CP4 Docker e CP5 database foundation automatizzati | primo Apply/Check LIVE CP5; ruoli DB e deploy applicazioni | testare CP5 sul VPS14 CP4 già validato |
 | Windows provisioning | workflow PowerShell checkpoint 1-8 live validato | integrazione Ansible e firewall policy completa | wrapper Ansible e policy firewall |
 | Ansible | inventory/playbook/contratti | task per tutti i role eccetto tuning Wazuh | implementare un role per checkpoint |
-| Docker Compose | catalogo runtime distribuito da CP4, `restart: no` | tag approvati, secret, DB host, LDAP, healthcheck, cron Nextcloud e avvio service-control | milestone separata per database e applicazioni, senza `down -v` |
+| Docker Compose | catalogo runtime distribuito da CP4, `restart: no`; DB foundation CP5 separata | tag approvati, ruoli/grants/password DB, LDAP, healthcheck, cron Nextcloud e avvio service-control | milestone applicativa, senza `down -v` |
 | CA/TLS | riferimenti e contratti | generazione CA/certificati e trust | generatore locale escluso da Git |
 | AD users/groups | gruppi automatici + utenti interattivi al checkpoint 6 live validati | manifest locale non ancora orchestrato | mantenere password interattive; aggiungere manifest locale in seguito |
 | DNS records | `iac/windows/provisioning.psd1` + checkpoint 5/7 live validati | forwarder finale AdGuard resta successivo | riconciliare il forwarder finale quando AdGuard sarà disponibile |
@@ -316,12 +339,13 @@ locali restano in `iac/vmware/*.local.yml` o nel file ignorato
 1. chiudere decisioni versioni/ISO e validare le tre VM;
 2. completare bootstrap OS e underlay statico;
 3. eseguire e validare DC02 AD/DNS con i checkpoint PowerShell;
-4. applicare/testare CP4 foundation Docker su una VPS14 pulita e isolata;
-5. completare database host e configurare/applicare AdGuard, CA e policy porte
-   container senza alterare il confine CP3;
-6. implementare un'applicazione per volta: dashboard, Forgejo, Nextcloud,
+4. CP1–CP4 sono LIVE VALIDATED; su rebuild pulito convergere i checkpoint in ordine;
+5. applicare/testare CP5 database foundation senza ruoli o dati applicativi;
+6. definire secret e login applicativi; completare Redis, AdGuard, CA/LDAPS e
+   policy porte container senza alterare il confine CP3;
+7. implementare un'applicazione per volta: dashboard, Forgejo, Nextcloud,
    Stirling, Pterodactyl, Wazuh;
-7. installare service-control e solo dopo eseguire acceptance E2E.
+8. installare service-control e solo dopo eseguire acceptance E2E.
 
 Ogni punto deve avere check-mode/read-only, apply limitato al proprio host e
 un test di health separato. Non creare un `install-all`.

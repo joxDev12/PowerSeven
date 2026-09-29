@@ -732,7 +732,7 @@ def runner_readonly_contract_fixture(runner: str) -> bool:
     if not (0 < key_check < key_else < key_ensure and enroll_guard < enroll_call and
             check_end < transaction_guard < migration_probe < stage < prepare < dispatch):
         return False
-    checks = [runner_mode_fixture("check", bootstrap="current", checkpoint=cp) for cp in ("1", "2", "3", "4")]
+    checks = [runner_mode_fixture("check", bootstrap="current", checkpoint=cp) for cp in ("1", "2", "3", "4", "5")]
     fixtures = checks + [
         runner_mode_fixture("check", bootstrap="absent"),
         runner_mode_fixture("check", bootstrap="old"),
@@ -744,7 +744,7 @@ def runner_readonly_contract_fixture(runner: str) -> bool:
     expected_checks = [
         (0, ["read-only SSH/protocol probe", f"checkpoint --check --checkpoint {cp}"] +
          (["peer/endpoint probes", "DC02 read-only state"] if cp == "3" else []))
-        for cp in ("1", "2", "3", "4")
+        for cp in ("1", "2", "3", "4", "5")
     ]
     expected = expected_checks + [
         (10, ["read-only SSH/protocol probe"]), (10, ["read-only SSH/protocol probe"]),
@@ -1201,6 +1201,7 @@ def main() -> int:
     current_capabilities = f"checkpoints={bootstrap_capabilities.group(1)}" if bootstrap_capabilities else "checkpoints="
     protocol_fixtures = (
         (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, True)),
+        (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\n{current_capabilities}\n", current_version, current_capabilities, "5"), (True, True)),
         (protocol_probe_fixture(0, "", f"powerseven-bootstrap {previous_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, False)),
         (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\ncheckpoints=1,2,3\n", current_version, current_capabilities, "4"), (True, False)),
         (protocol_probe_fixture(127, "bootstrap command not found", "", current_version, current_capabilities, "2"), (True, False)),
@@ -1213,7 +1214,7 @@ def main() -> int:
     else:
         report("FAIL", "protocol-probe-fixtures", "protocol/authentication result fixtures failed")
     if runner_readonly_contract_fixture(runner):
-        report("PASS", "windows-check-readonly", "CP1-CP4 Check/current, missing/old bootstrap, missing key, Apply enrollment/migration and PrepareBootstrap migration fixtures pass")
+        report("PASS", "windows-check-readonly", "CP1-CP5 Check/current, missing/old bootstrap, missing key, Apply enrollment/migration and PrepareBootstrap migration fixtures pass")
     else:
         report("FAIL", "windows-check-readonly", "runner Check can reach a mutator, lacks a fail-closed bootstrap/key result, or Apply/PrepareBootstrap mutation paths regressed")
     enrollment_match = re.search(r"if \(-not \$sshKeyAuthentication\) \{(?P<body>.*?)\n\}\nWrite-Result 'PASS' 'ssh-key-auth'", runner, re.DOTALL)

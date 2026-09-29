@@ -127,15 +127,33 @@ conflittuali o runtime file non gestiti.
 
 Docker documenta il backend `iptables-nft`/`iptables-legacy` e avverte che le
 regole native create con `nft` non sono supportate sullo stesso host. Perciò il
-primo Apply CP4 isolato deve verificare nuovamente route VPN/RDP e che la NIC
-Bridged continui a esporre soltanto WireGuard prima di procedere con le app.
+test CP4 LIVE ha verificato Apply e Check, incluse le regole `DOCKER-USER`, e
+ha confermato che VPN/RDP restano funzionanti e la NIC Bridged resta protetta
+da CP3.
 
 Check è read-only e distingue OS/CP2/CP3, pacchetti e daemon, firewall Docker,
 file/runtime Compose, reti, volumi, container, healthcheck, listener locali e
 database esterni. Le categorie applicative sono diagnostiche: il Compose
 attuale non dichiara healthcheck e le applicazioni restano una milestone
-successiva. Non avviare lo stack finché non sono approvati i tag immagine e
-modellati database, LDAP, secret, porte e avvio service-control.
+successiva. CP5 prepara PostgreSQL/MariaDB host e database vuoti, ma non crea
+login/grant applicativi e non avvia lo stack. Non avviare le app finché non sono
+approvati i tag immagine e modellati database, LDAP, secret, porte e avvio
+service-control.
 
 Renderizzare i placeholder (`<...>`/`REQUIRED_SECRET`) in un workspace escluso
 da Git prima di un futuro provisioning.
+
+### CP5 — PostgreSQL e MariaDB
+
+Il runner su DC02 orchestra il bootstrap v16 senza comandi SSH manuali:
+
+```powershell
+.\iac\windows\setup-powerseven.ps1 -Apply -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 5
+.\iac\windows\setup-powerseven.ps1 -Check -Vps14Address 192.168.214.14 -UbuntuUsername serveradmin -Checkpoint 5
+```
+
+Apply richiede CP1–CP4, installa solo le versioni repository dichiarate,
+conserva cluster/dati, crea solo i database mancanti e non avvia Compose.
+Check è read-only. Entrambi verificano storage persistente, listener e
+autenticazione locale; Check identifica anche l'indirizzo/processo che ascolta
+sulla porta 53. CP5 non definisce ancora i login, grant o password applicativi.

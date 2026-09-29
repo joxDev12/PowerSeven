@@ -202,22 +202,26 @@ services:
     name: PostgreSQL
     systemd_unit: postgresql@18-main.service
     version_observed: "18.6"
-    listen: [127.0.0.1:5432, 10.10.10.14:5432]
+    listen: [127.0.0.1:5432, 192.168.214.14:5432]
     databases: [forgejo, nextcloud, postgres]
     observed_legacy_databases: [azienda_lab]
     persistent: true
     core_current: false
     core_reason: shared_dependency_for_forgejo_and_nextcloud
-    secret_refs: [postgres_admin_password, application_database_passwords]
+    admin_authentication: local_peer
+    application_role_names: not_modelled
+    secret_refs: [application_database_passwords]
   - graph_id: db_mariadb
     host: vps14
     kind: database
     name: MariaDB
     version_observed: "10.11.14"
-    listen: [127.0.0.1:3306]
+    listen: [127.0.0.1:3306, 192.168.214.14:3306]
     databases: [panel]
     persistent: true
-    secret_refs: [mariadb_admin_password, pterodactyl_database_password]
+    admin_authentication: root_unix_socket
+    application_role_names: not_modelled
+    secret_refs: [pterodactyl_database_password]
   - graph_id: db_redis
     host: vps14
     kind: datastore

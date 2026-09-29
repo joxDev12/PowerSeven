@@ -43,18 +43,24 @@ recreatable_infrastructure:
     host: vps14
     kind: empty_database
     source: db_postgresql
-    data: [database schemas, roles, grants]
-    target: create_empty_databases
+    data: [empty databases]
+    data_directory: /var/lib/postgresql/18/main
+    target: create_missing_databases
     databases: [forgejo, nextcloud, postgres]
+    admin_authentication: local_peer
+    application_role_names: not_modelled
     persistent: true
     recreatable: true
   - graph_id: datastore_mariadb
     host: vps14
     kind: empty_database
     source: db_mariadb
-    data: [database schema, roles, grants]
-    target: create_empty_database
+    data: [empty database]
+    data_directory: /var/lib/mysql
+    target: create_missing_database
     databases: [panel]
+    admin_authentication: root_unix_socket
+    application_role_names: not_modelled
     persistent: true
     recreatable: true
   - graph_id: datastore_docker_volumes

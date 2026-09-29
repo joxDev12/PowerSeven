@@ -22,4 +22,10 @@ limitato da Windows Firewall alla subnet `10.99.0.0/24`.
 
 TLS usa certificati emessi da `SOC Lab Training CA` per `lab.test`; sono stati consultati solo subject, issuer e date. Chiavi private e materiale CA non sono stati copiati. Wazuh agent è attivo su VPS12 e DC02, con Manager VPS14. I firewall profili Windows risultavano attivi. Su VPS12 e VPS14 UFW risultava inattivo; VPS14 usa nftables/Docker per forwarding e NAT. Verifiche read-only: `sudo ss -tulpn`, `sudo nft list ruleset`, `Get-NetFirewallProfile`, `Get-NetTCPConnection -State Listen`.
 
-Rischi da riesaminare con evidenza NSG: RDP/SSH/WinRM su DC02, Nginx, PostgreSQL su `10.10.10.14`, Wings SFTP 2022, Wazuh e i binding Scribble. Non è stata modificata alcuna regola e nessuna porta in ascolto è qui classificata automaticamente come Internet-pubblica.
+Le osservazioni Azure storiche includevano PostgreSQL su `10.10.10.14`; nel
+target locale CP5 i database host si legano a `127.0.0.1` e
+`192.168.214.14`. L'ingresso Bridged continua a essere bloccato da CP3, mentre
+l'autenticazione DB resta locale finché non saranno definiti ruoli e policy
+applicative. Riesaminare separatamente gli NSG Azure, RDP/SSH/WinRM su DC02,
+Nginx, Wings SFTP 2022, Wazuh e i binding Scribble. Nessuna porta in ascolto è
+classificata automaticamente come Internet-pubblica.

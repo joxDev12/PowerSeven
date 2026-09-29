@@ -9,8 +9,8 @@ CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
 PEER_NAMES_CSV=''
 declare -a ADMIN_PEERS=()
-readonly POWERSEVEN_BOOTSTRAP_VERSION='15'
-readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3,4'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='16'
+readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3,4,5'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
 readonly UNDERLAY_NETWORK='192.168.214.0/24'
@@ -41,6 +41,15 @@ readonly DOCKER_RUNTIME_DIR='/opt/powerseven/docker'
 readonly DOCKER_FIREWALL_SCRIPT='/usr/local/lib/powerseven/apply-docker-user-firewall.sh'
 readonly DOCKER_FIREWALL_UNIT='powerseven-docker-firewall.service'
 readonly DOCKER_FIREWALL_DROPIN='/etc/systemd/system/docker.service.d/powerseven-firewall.conf'
+readonly POSTGRESQL_VERSION='18.6'
+readonly POSTGRESQL_PACKAGE='postgresql-18'
+readonly POSTGRESQL_UNIT='postgresql@18-main.service'
+readonly POSTGRESQL_DATABASES=(forgejo nextcloud)
+readonly MARIADB_VERSION='10.11.14'
+readonly MARIADB_PACKAGE='mariadb-server'
+readonly MARIADB_UNIT='mariadb.service'
+readonly MARIADB_DATABASES=(panel)
+readonly DATABASE_BIND_ADDRESSES='127.0.0.1,192.168.214.14'
 RUNTIME_STAGE_ID=''
 
 usage() {
@@ -58,9 +67,10 @@ Implemented checkpoints:
   2  configure the two-NIC local network with a rollback guard
   3  configure the WireGuard administrative VPN and chosen client peers
   4  install pinned Docker/Compose runtime and stage the service catalog
+  5  install PostgreSQL/MariaDB, bind to loopback and VPS14 underlay, and create only missing empty databases
 
 Checkpoint 4 does not start applications: image pins, application secrets,
-host databases and service lifecycle configuration remain separate inputs.
+application database roles and service lifecycle configuration remain separate inputs.
 EOF
 }
 
@@ -77,7 +87,7 @@ if [[ "$#" -eq 1 && "$1" == '--protocol' ]]; then
     exit 0
 fi
 report() {
-    if [[ "$1" == 'MISSING' && "$MODE" == 'check' && "$CHECKPOINT" == '4' ]]; then
+    if [[ "$1" == 'MISSING' && "$MODE" == 'check' && ( "$CHECKPOINT" == '4' || "$CHECKPOINT" == '5' ) ]]; then
         CHECK_NEEDS_APPLY=1
     fi
     printf '%s: %s: %s\n' "$1" "$2" "$3"
@@ -1978,6 +1988,401 @@ EOF
     report INFO cp4-applications 'Compose containers were not started; unresolved image pins, DB/LDAP configuration and secrets require the next application milestone'
 }
 
+database_package_version() {
+    local record
+    record=$(dpkg-query -W -f='${db:Status-Abbrev} ${Version}' "$1" 2>/dev/null || true)
+    awk '$1 ~ /^ii/ { print $2; exit }' <<< "$record"
+}
+
+postgres_query() {
+    sudo -u postgres -- psql -X -qAt -v ON_ERROR_STOP=1 --username=postgres --port=5432 --dbname=postgres --command="$1"
+}
+
+mariadb_query() {
+    mariadb --no-defaults --user=root --protocol=socket --batch --skip-column-names --execute="$1"
+}
+
+mariadb_root_uses_unix_socket() {
+    local definition
+    definition=$(mariadb --no-defaults --user=root --protocol=socket --batch --skip-column-names \
+        --execute="SHOW CREATE USER 'root'@'localhost'" 2>/dev/null) || return 1
+    [[ "$definition" == *unix_socket* ]]
+}
+
+postgres_repository() (
+    local key_tmp source_tmp key_path='/usr/share/keyrings/powerseven-postgresql.asc'
+    local source_path='/etc/apt/sources.list.d/powerseven-pgdg.sources'
+    local source_content
+    source_content=$(cat <<'EOF'
+Types: deb
+URIs: https://apt.postgresql.org/pub/repos/apt
+Suites: noble-pgdg
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/powerseven-postgresql.asc
+EOF
+)
+    install -d -o root -g root -m 0755 /usr/share/keyrings /etc/apt/sources.list.d
+    key_tmp=$(mktemp /usr/share/keyrings/.powerseven-postgresql.XXXXXX)
+    source_tmp=$(mktemp /etc/apt/sources.list.d/.powerseven-pgdg.XXXXXX)
+    trap 'rm -f "$key_tmp" "$source_tmp"' EXIT
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o "$key_tmp"
+    printf '%s\n' "$source_content" > "$source_tmp"
+    if [[ -e "$key_path" ]] && ! cmp -s "$key_tmp" "$key_path"; then
+        report FAIL postgresql-repository 'existing signing key differs from the official PostgreSQL key; preserving it'
+        return 1
+    fi
+    if [[ -e "$source_path" ]] && ! cmp -s "$source_tmp" "$source_path"; then
+        report FAIL postgresql-repository 'existing PGDG source differs from the managed Noble source; preserving it'
+        return 1
+    fi
+    install -o root -g root -m 0644 "$key_tmp" "$key_path"
+    install -o root -g root -m 0644 "$source_tmp" "$source_path"
+)
+
+database_empty_path() {
+    local path="$1"
+    [[ ! -e "$path" ]] || ! find "$path" -mindepth 1 -maxdepth 2 -print -quit 2>/dev/null | grep -q .
+}
+
+database_prepare_packages() {
+    local postgres_installed mariadb_installed postgres_candidate mariadb_candidate
+    local -a packages=()
+    postgres_installed=$(database_package_version "$POSTGRESQL_PACKAGE")
+    mariadb_installed=$(database_package_version "$MARIADB_PACKAGE")
+    if [[ -n "$postgres_installed" ]]; then
+        [[ "$postgres_installed" == "$POSTGRESQL_VERSION"-* ]] || {
+            report FAIL postgresql-package "installed package is $postgres_installed; preserving it instead of upgrading/replacing it"
+            return 1
+        }
+    else
+        database_empty_path /var/lib/postgresql || {
+            report FAIL postgresql-storage 'PostgreSQL data exists without the managed package; refusing initialization or migration'
+            return 1
+        }
+        postgres_candidate=$(apt-cache policy "$POSTGRESQL_PACKAGE" | awk '$1 == "Candidate:" { print $2; exit }')
+        [[ "$postgres_candidate" == "$POSTGRESQL_VERSION"-* ]] || {
+            report FAIL postgresql-package "PGDG candidate ${postgres_candidate:-unavailable} does not match $POSTGRESQL_VERSION"
+            return 1
+        }
+        packages+=("$POSTGRESQL_PACKAGE=$postgres_candidate")
+    fi
+    if [[ -n "$mariadb_installed" ]]; then
+        [[ "$mariadb_installed" == *"$MARIADB_VERSION"* ]] || {
+            report FAIL mariadb-package "installed package is $mariadb_installed; preserving it instead of upgrading/replacing it"
+            return 1
+        }
+    else
+        database_empty_path /var/lib/mysql || {
+            report FAIL mariadb-storage 'MariaDB data exists without the managed package; refusing initialization or migration'
+            return 1
+        }
+        mariadb_candidate=$(apt-cache policy "$MARIADB_PACKAGE" | awk '$1 == "Candidate:" { print $2; exit }')
+        [[ "$mariadb_candidate" == *"$MARIADB_VERSION"* ]] || {
+            report FAIL mariadb-package "Ubuntu Noble candidate ${mariadb_candidate:-unavailable} does not match $MARIADB_VERSION"
+            return 1
+        }
+        packages+=("$MARIADB_PACKAGE=$mariadb_candidate")
+    fi
+    if ((${#packages[@]})); then
+        DEBIAN_FRONTEND=noninteractive apt-get install --no-remove --no-upgrade -y --no-install-recommends "${packages[@]}"
+    fi
+}
+
+MARIADB_CONFIG_CHANGED=0
+ensure_mariadb_bind_config() {
+    local addresses="$1" path='/etc/mysql/mariadb.conf.d/99-powerseven-foundation.cnf'
+    local temporary
+    MARIADB_CONFIG_CHANGED=0
+    install -d -o root -g root -m 0755 "$(dirname "$path")"
+    if [[ -e "$path" ]] && ! grep -Fxq '# Managed by PowerSeven CP5' "$path"; then
+        report FAIL mariadb-config "refusing to overwrite unmanaged file $path"
+        return 1
+    fi
+    temporary=$(mktemp "$(dirname "$path")/.powerseven-db.XXXXXX")
+    cat > "$temporary" <<EOF
+# Managed by PowerSeven CP5
+[mariadbd]
+bind-address=$addresses
+EOF
+    if ! cmp -s "$temporary" "$path"; then
+        chown root:root "$temporary"
+        chmod 0644 "$temporary"
+        mv -f -- "$temporary" "$path"
+        MARIADB_CONFIG_CHANGED=1
+    else
+        rm -f "$temporary"
+    fi
+}
+
+ensure_postgresql_bind_config() {
+    local state version current source hba
+    postgres_cluster_layout_is_safe yes || {
+        report FAIL postgresql-cluster 'expected only PostgreSQL cluster 18/main on port 5432; preserving other clusters'
+        return 1
+    }
+    state=$(postgres_query "SELECT current_setting('server_version') || E'\\t' || setting || E'\\t' || source FROM pg_settings WHERE name='listen_addresses'") || {
+        report FAIL postgresql-config 'could not inspect effective listen_addresses through the local postgres socket'
+        return 1
+    }
+    IFS=$'\t' read -r version current source <<< "$state"
+    [[ "$version" == "$POSTGRESQL_VERSION" ]] || {
+        report FAIL postgresql-cluster "connected cluster reports $version; expected $POSTGRESQL_VERSION; preserving it"
+        return 1
+    }
+    hba=$(postgres_query "SELECT count(*) FILTER (WHERE error IS NOT NULL) || E'\\t' || count(*) FILTER (WHERE type LIKE 'host%' AND auth_method <> 'reject' AND (address IS NULL OR address NOT IN ('127.0.0.1','127.0.0.1/32','127.0.0.0/8','::1','::1/128'))) || E'\\t' || CASE WHEN COALESCE(bool_or(type='local' AND auth_method='peer' AND ('all'=ANY(user_name) OR 'postgres'=ANY(user_name))),false) THEN 'peer' ELSE 'missing' END FROM pg_hba_file_rules") || {
+        report FAIL postgresql-auth-policy 'could not inspect pg_hba before opening the underlay listener'
+        return 1
+    }
+    [[ "$hba" == $'0\t0\tpeer' ]] || {
+        report FAIL postgresql-auth-policy "non-loopback or invalid pg_hba rules exist; preserving them and refusing to bind: $hba"
+        return 1
+    }
+    [[ "$current" == "$DATABASE_BIND_ADDRESSES" ]] && return 0
+    if [[ "$source" == 'command line' ]]; then
+        report FAIL postgresql-config 'listen_addresses is overridden on the server command line; preserving the external override'
+        return 1
+    fi
+    postgres_query "ALTER SYSTEM SET listen_addresses TO '$DATABASE_BIND_ADDRESSES'" >/dev/null || {
+        report FAIL postgresql-config 'could not set the managed listen_addresses value'
+        return 1
+    }
+    systemctl restart "$POSTGRESQL_UNIT" || {
+        report FAIL postgresql-config 'PostgreSQL restart failed after the bind change; rerun Apply to retry'
+        return 1
+    }
+}
+
+ensure_empty_database() {
+    local engine="$1" database="$2" existing
+    if [[ "$engine" == postgresql ]]; then
+        existing=$(postgres_query "SELECT 1 FROM pg_database WHERE datname='$database'") || return 1
+        if [[ "$existing" != '1' ]]; then
+            sudo -u postgres -- createdb --maintenance-db=postgres --owner=postgres "$database" || return 1
+        fi
+    else
+        existing=$(mariadb_query "SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$database'") || return 1
+        if [[ "$existing" != '1' ]]; then
+            mariadb_query "CREATE DATABASE $database" || return 1
+        fi
+    fi
+}
+
+database_listener_addresses() {
+    ss -H -lnt "sport = :$1" | awk '{ print $4 }' | sort -u
+}
+
+database_storage_ready() {
+    local path="$1" owner="$2" root_mount data_mount mode
+    [[ -d "$path" && "$(stat -c '%U:%G' "$path" 2>/dev/null || true)" == "$owner" ]] || return 1
+    mode=$(stat -c '%a' "$path" 2>/dev/null || true)
+    [[ "$mode" =~ ^[0-7]{3,4}$ ]] && (( (8#$mode & 07027) == 0 )) || return 1
+    root_mount=$(findmnt -n -o TARGET -T / 2>/dev/null || true)
+    data_mount=$(findmnt -n -o TARGET -T "$path" 2>/dev/null || true)
+    [[ "$root_mount" == '/' && "$data_mount" == "$root_mount" ]]
+}
+
+database_cp1_storage_ready() {
+    detect_root && detect_lvm && verify_root_mount && read_lvm_sizes &&
+        (( VG_FREE_BYTES <= MIN_FREE_BYTES )) &&
+        (( ROOT_FS_BYTES + FS_MARGIN_BYTES >= LV_BYTES ))
+}
+
+database_os_is_supported() {
+    local os_id os_version os_codename architecture
+    os_id=$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_version=$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    os_codename=$(awk -F= '$1 == "VERSION_CODENAME" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release 2>/dev/null || true)
+    architecture=$(dpkg --print-architecture 2>/dev/null || true)
+    [[ "$os_id" == ubuntu && "$os_version" == '24.04' && "$os_codename" == noble && "$architecture" == amd64 ]]
+}
+
+postgres_cluster_layout_is_safe() {
+    local require_target="${1:-no}" clusters
+    if ! command -v pg_lsclusters >/dev/null 2>&1; then
+        [[ "$require_target" == no && ! -d /etc/postgresql ]]
+        return
+    fi
+    clusters=$(pg_lsclusters --no-header 2>/dev/null) || return 1
+    if [[ -z "$clusters" ]]; then
+        [[ "$require_target" == no ]]
+        return
+    fi
+    awk -v required="$require_target" '
+        NR != 1 || $1 != "18" || $2 != "main" || $3 != "5432" ||
+            $5 != "postgres" || $6 != "/var/lib/postgresql/18/main" { bad=1 }
+        END { if (bad || NR > 1 || (required == "yes" && NR != 1)) exit 1 }
+    ' <<< "$clusters"
+}
+
+database_foundation_check() {
+    local missing=0 command_name pg_state pg_version pg_bind pg_port pg_data pg_hba pg_databases pg_roles
+    local maria_state maria_version maria_bind maria_port maria_data maria_users maria_databases expected actual db dns53
+    local -a commands=(systemctl dpkg dpkg-query awk ss findmnt stat sudo psql pg_lsclusters mariadb docker timeout readlink lvs vgs df)
+    dns53=$(ss -H -lntup 'sport = :53' 2>/dev/null || true)
+    report INFO dns-port53 "current TCP/UDP 53 listener (diagnostic only): ${dns53:-none}"
+    for command_name in "${commands[@]}"; do
+        command -v "$command_name" >/dev/null 2>&1 || { report MISSING "cp5-command:$command_name" 'required read-only probe is unavailable'; missing=1; }
+    done
+    ((missing == 0)) || return 1
+
+    if database_os_is_supported; then
+        report PASS cp5-os 'Ubuntu 24.04 Noble amd64'
+    else
+        report MISSING cp5-os 'CP5 requires Ubuntu Server 24.04 Noble amd64'
+        missing=1
+    fi
+    if database_cp1_storage_ready; then
+        report PASS cp5-cp1 'CP1 LVM root storage is expanded and remains the root filesystem'
+    else
+        report MISSING cp5-cp1 'CP1 persistent LVM root storage is absent or not fully expanded'
+        missing=1
+    fi
+    if detect_network_interfaces && verify_network_state; then report PASS cp5-cp2 'CP2 network ready'; else report MISSING cp5-cp2 'CP2 network is not ready'; missing=1; fi
+    if admin_firewall_is_ready && systemctl is-active --quiet "wg-quick@$WG_INTERFACE.service"; then report PASS cp5-cp3 'CP3 WireGuard and bridged-ingress firewall ready'; else report MISSING cp5-cp3 'CP3 firewall/VPN is not ready'; missing=1; fi
+    if docker_firewall_is_ready && docker_runtime_files_are_ready &&
+       docker compose -f "$DOCKER_RUNTIME_DIR/compose.yml" --env-file "$DOCKER_RUNTIME_DIR/.env.example" config --quiet >/dev/null 2>&1; then
+        report PASS cp5-cp4 'CP4 Docker foundation and Compose catalog ready; no containers started'
+    else
+        report MISSING cp5-cp4 'CP4 Docker foundation/catalog is not ready'
+        missing=1
+    fi
+
+    pg_state=$(postgres_query "SELECT current_setting('server_version') || E'\\t' || current_setting('listen_addresses') || E'\\t' || current_setting('port') || E'\\t' || current_setting('data_directory')" 2>/dev/null || true)
+    if ! postgres_cluster_layout_is_safe yes || [[ -z "$pg_state" ]] || ! systemctl is-active --quiet "$POSTGRESQL_UNIT" || ! systemctl is-enabled --quiet postgresql.service; then
+        report MISSING postgresql-service "expected active/enabled $POSTGRESQL_UNIT and local socket access"
+        missing=1
+    else
+        IFS=$'\t' read -r pg_version pg_bind pg_port pg_data <<< "$pg_state"
+        [[ "$pg_version" == "$POSTGRESQL_VERSION" ]] && report PASS postgresql-version "$pg_version" || { report MISSING postgresql-version "expected $POSTGRESQL_VERSION; found $pg_version"; missing=1; }
+        [[ "$pg_bind" == "$DATABASE_BIND_ADDRESSES" && "$pg_port" == '5432' ]] && report PASS postgresql-bind "$pg_bind:$pg_port" || { report MISSING postgresql-bind "unexpected bind/port: $pg_bind:$pg_port"; missing=1; }
+        [[ "$pg_data" == '/var/lib/postgresql/18/main' ]] && database_storage_ready "$pg_data" 'postgres:postgres' && report PASS postgresql-storage "$pg_data is persistent and postgres-owned" || { report MISSING postgresql-storage "unexpected or unsafe data path: $pg_data"; missing=1; }
+        pg_roles=$(postgres_query "SELECT count(*) FROM pg_roles WHERE rolname='postgres' AND rolsuper" 2>/dev/null || true)
+        [[ "$pg_roles" == 1 ]] && report PASS postgresql-local-auth 'postgres OS identity authenticates through the local socket' || { report MISSING postgresql-local-auth 'local postgres socket authentication failed'; missing=1; }
+        pg_hba=$(postgres_query "SELECT count(*) FILTER (WHERE error IS NOT NULL) || E'\\t' || count(*) FILTER (WHERE type LIKE 'host%' AND auth_method <> 'reject' AND (address IS NULL OR address NOT IN ('127.0.0.1','127.0.0.1/32','127.0.0.0/8','::1','::1/128'))) || E'\\t' || CASE WHEN COALESCE(bool_or(type='local' AND auth_method='peer' AND ('all'=ANY(user_name) OR 'postgres'=ANY(user_name))),false) THEN 'peer' ELSE 'missing' END FROM pg_hba_file_rules" 2>/dev/null || true)
+        [[ "$pg_hba" == $'0\t0\tpeer' ]] && report PASS postgresql-auth-policy 'pg_hba parses, uses peer for the local postgres administrator and grants no non-loopback TCP access' || { report MISSING postgresql-auth-policy "unsafe or invalid pg_hba state: $pg_hba"; missing=1; }
+        pg_databases=$(postgres_query "SELECT datname FROM pg_database WHERE datname IN ('postgres','forgejo','nextcloud')" 2>/dev/null || true)
+        for db in postgres "${POSTGRESQL_DATABASES[@]}"; do
+            grep -Fxq "$db" <<< "$pg_databases" && report PASS "postgresql-database:$db" 'present and preserved' || { report MISSING "postgresql-database:$db" 'required database is absent'; missing=1; }
+        done
+    fi
+
+    maria_state=$(mariadb_query "SELECT VERSION() || '\t' || @@GLOBAL.bind_address || '\t' || @@GLOBAL.port || '\t' || @@GLOBAL.datadir" 2>/dev/null || true)
+    if [[ -z "$maria_state" ]] || ! systemctl is-active --quiet "$MARIADB_UNIT" || ! systemctl is-enabled --quiet "$MARIADB_UNIT"; then
+        report MISSING mariadb-service "expected active/enabled $MARIADB_UNIT and root socket access"
+        missing=1
+    else
+        IFS=$'\t' read -r maria_version maria_bind maria_port maria_data <<< "$maria_state"
+        maria_data=$(printf '%s' "$maria_data" | sed 's:/*$::')
+        [[ "$maria_version" == "$MARIADB_VERSION"-* ]] && report PASS mariadb-version "$maria_version" || { report MISSING mariadb-version "expected $MARIADB_VERSION; found $maria_version"; missing=1; }
+        [[ "$maria_bind" == "$DATABASE_BIND_ADDRESSES" && "$maria_port" == 3306 ]] && report PASS mariadb-bind "$maria_bind:$maria_port" || { report MISSING mariadb-bind "unexpected bind/port: $maria_bind:$maria_port"; missing=1; }
+        [[ "$maria_data" == '/var/lib/mysql' ]] && database_storage_ready "$maria_data" 'mysql:mysql' && report PASS mariadb-storage "$maria_data is persistent and mysql-owned" || { report MISSING mariadb-storage "unexpected or unsafe data path: $maria_data"; missing=1; }
+        if mariadb_root_uses_unix_socket; then
+            report PASS mariadb-local-auth 'root@localhost authenticates with unix_socket through the local socket'
+        else
+            report MISSING mariadb-local-auth 'root@localhost is not configured for unix_socket authentication'
+            missing=1
+        fi
+        maria_users=$(mariadb_query "SELECT COUNT(*) FROM mysql.user WHERE Host NOT IN ('localhost','127.0.0.1','::1')" 2>/dev/null || true)
+        [[ "$maria_users" == 0 ]] && report PASS mariadb-auth-policy 'no non-local accounts exist' || { report MISSING mariadb-auth-policy "non-local accounts exist ($maria_users); none were changed"; missing=1; }
+        maria_databases=$(mariadb_query "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='panel'" 2>/dev/null || true)
+        grep -Fxq panel <<< "$maria_databases" && report PASS mariadb-database:panel 'present and preserved' || { report MISSING mariadb-database:panel 'required database is absent'; missing=1; }
+    fi
+
+    expected=$(printf '%s\n' '127.0.0.1:5432' '192.168.214.14:5432' | sort -u)
+    actual=$(database_listener_addresses 5432 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && report PASS postgresql-listener "$actual" || { report MISSING postgresql-listener "unexpected listeners: $actual"; missing=1; }
+    expected=$(printf '%s\n' '127.0.0.1:3306' '192.168.214.14:3306' | sort -u)
+    actual=$(database_listener_addresses 3306 2>/dev/null || true)
+    [[ "$actual" == "$expected" ]] && report PASS mariadb-listener "$actual" || { report MISSING mariadb-listener "unexpected listeners: $actual"; missing=1; }
+    if timeout 2 bash -c ':</dev/tcp/192.168.214.14/5432' >/dev/null 2>&1 &&
+       timeout 2 bash -c ':</dev/tcp/192.168.214.14/3306' >/dev/null 2>&1; then
+        report PASS database-underlay-transport 'both local underlay TCP sockets accept connections; DB authentication remains local-only'
+    else
+        report MISSING database-underlay-transport 'configured underlay TCP listener is unavailable'
+        missing=1
+    fi
+    report INFO database-application-roles 'no application role names/grants or DB passwords are defined; CP5 creates none'
+    report INFO database-applications 'CP5 does not start containers or install service-control profiles'
+    [[ "$missing" -eq 0 ]]
+}
+
+database_checkpoint() {
+    local command_name maria_bind maria_users database
+    local -a commands=(apt-get apt-cache dpkg dpkg-query curl install mktemp cmp systemctl sudo psql pg_lsclusters createdb mariadb ss findmnt stat timeout docker readlink lvs vgs df awk)
+    if [[ "$MODE" == 'check' ]]; then database_foundation_check; return $?; fi
+    [[ "$EUID" -eq 0 ]] || { report FAIL privileges 'CP5 apply requires root'; return 1; }
+    if ! database_os_is_supported || ! database_cp1_storage_ready || ! detect_network_interfaces || ! verify_network_state || ! admin_firewall_is_ready ||
+       ! systemctl is-active --quiet "wg-quick@$WG_INTERFACE.service" ||
+       ! docker_firewall_is_ready || ! docker_runtime_files_are_ready; then
+        report FAIL cp5-prerequisites 'Ubuntu 24.04 Noble amd64 and CP1 storage, CP2, CP3, CP4 must be ready; refusing database installation'
+        return 1
+    fi
+    for command_name in "${commands[@]}"; do
+        command -v "$command_name" >/dev/null 2>&1 || { report FAIL "cp5-command:$command_name" 'required installer command is unavailable'; return 1; }
+    done
+    postgres_repository || return 1
+    apt-get update
+    if [[ -z "$(database_package_version "$MARIADB_PACKAGE")" ]]; then
+        database_empty_path /var/lib/mysql || {
+            report FAIL mariadb-storage 'MariaDB data exists without the managed package; refusing initialization or migration'
+            return 1
+        }
+        ensure_mariadb_bind_config '127.0.0.1' || return 1
+    fi
+    database_prepare_packages || return 1
+    postgres_cluster_layout_is_safe || {
+        report FAIL postgresql-cluster 'existing PostgreSQL clusters differ from 18/main on port 5432; preserving them'
+        return 1
+    }
+    systemctl enable postgresql.service "$MARIADB_UNIT"
+    if systemctl is-active --quiet "$MARIADB_UNIT"; then
+        if ! mariadb_root_uses_unix_socket; then
+            report FAIL mariadb-local-auth 'root@localhost does not use unix_socket authentication; preserving existing authentication'
+            return 1
+        fi
+        maria_users=$(mariadb_query "SELECT COUNT(*) FROM mysql.user WHERE Host NOT IN ('localhost','127.0.0.1','::1')" 2>/dev/null || true)
+        [[ "$maria_users" == 0 ]] || {
+            report FAIL mariadb-auth-policy "non-local accounts exist (${maria_users:-unavailable}); preserving existing bind/config"
+            return 1
+        }
+        maria_bind=$(mariadb_query "SELECT @@GLOBAL.bind_address" 2>/dev/null || true)
+        ensure_mariadb_bind_config "$DATABASE_BIND_ADDRESSES" || return 1
+        if [[ "$MARIADB_CONFIG_CHANGED" -eq 1 && "$maria_bind" != "$DATABASE_BIND_ADDRESSES" ]]; then
+            systemctl restart "$MARIADB_UNIT" || { report FAIL mariadb-service 'MariaDB restart failed after bind configuration; rerun Apply to retry'; return 1; }
+        fi
+    else
+        ensure_mariadb_bind_config '127.0.0.1' || return 1
+        systemctl start "$MARIADB_UNIT" || { report FAIL mariadb-service 'MariaDB could not start with the local-only bootstrap bind'; return 1; }
+        maria_bind=$(mariadb_query "SELECT @@GLOBAL.bind_address" 2>/dev/null || true)
+        [[ "$maria_bind" == '127.0.0.1' ]] || {
+            report FAIL mariadb-bind "local-only bootstrap bind did not take effect ($maria_bind); preserving external exposure state"
+            return 1
+        }
+        if ! mariadb_root_uses_unix_socket; then
+            report FAIL mariadb-local-auth 'root@localhost does not use unix_socket authentication; MariaDB remains bound to loopback'
+            return 1
+        fi
+        maria_users=$(mariadb_query "SELECT COUNT(*) FROM mysql.user WHERE Host NOT IN ('localhost','127.0.0.1','::1')" 2>/dev/null || true)
+        [[ "$maria_users" == 0 ]] || {
+            report FAIL mariadb-auth-policy "non-local accounts exist (${maria_users:-unavailable}); MariaDB remains bound to loopback"
+            return 1
+        }
+        ensure_mariadb_bind_config "$DATABASE_BIND_ADDRESSES" || return 1
+        systemctl restart "$MARIADB_UNIT" || { report FAIL mariadb-service 'MariaDB restart failed after bind configuration; rerun Apply to retry'; return 1; }
+    fi
+    systemctl start "$POSTGRESQL_UNIT" || { report FAIL postgresql-service 'PostgreSQL 18/main could not be started; existing clusters were not reset'; return 1; }
+    ensure_postgresql_bind_config || return 1
+    for database in "${POSTGRESQL_DATABASES[@]}"; do
+        ensure_empty_database postgresql "$database" || { report FAIL "postgresql-database:$database" 'creation failed; existing databases were untouched'; return 1; }
+    done
+    for database in "${MARIADB_DATABASES[@]}"; do
+        ensure_empty_database mariadb "$database" || { report FAIL "mariadb-database:$database" 'creation failed; existing databases were untouched'; return 1; }
+    done
+    database_foundation_check || { report FAIL cp5-validation 'post-apply checks failed; databases were not dropped or reset'; return 1; }
+    report PASS cp5-foundation 'PostgreSQL and MariaDB are installed and ready for later application-role configuration'
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check) MODE='check'; shift ;;
@@ -2026,8 +2431,8 @@ if [[ "$MODE" == 'apply' && "$EUID" -ne 0 ]]; then
     report FAIL privileges 'apply requires root; use sudo'
     exit 2
 fi
-if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' && "$CHECKPOINT" != '4' ]]; then
-    report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2, 3 and 4 are implemented'
+if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' && "$CHECKPOINT" != '4' && "$CHECKPOINT" != '5' ]]; then
+    report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2, 3, 4 and 5 are implemented'
     exit 2
 fi
 if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" || -n "$RUNTIME_STAGE_ID" ) ]]; then
@@ -2053,6 +2458,9 @@ if [[ "$CHECKPOINT" == '4' && "$MODE" == 'apply' && ! "$RUNTIME_STAGE_ID" =~ ^[a
 fi
 if [[ "$CHECKPOINT" == '4' && "$MODE" == 'check' && -n "$RUNTIME_STAGE_ID" ]]; then
     report FAIL arguments 'checkpoint 4 check does not accept a runtime token'; exit 2
+fi
+if [[ "$CHECKPOINT" == '5' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" || -n "$RUNTIME_STAGE_ID" ) ]]; then
+    report FAIL arguments 'network/client/runtime options are invalid for checkpoint 5'; exit 2
 fi
 if [[ -n "$CLEANUP_CLIENT" && "$MODE" != 'apply' ]]; then
     report FAIL arguments '--cleanup-client requires --apply'; exit 2
@@ -2087,6 +2495,10 @@ case "$CHECKPOINT" in
         ;;
     4)
         docker_checkpoint
+        if [[ "$MODE" == 'check' ]] && (( CHECK_NEEDS_APPLY )); then exit 1; fi
+        ;;
+    5)
+        database_checkpoint
         if [[ "$MODE" == 'check' ]] && (( CHECK_NEEDS_APPLY )); then exit 1; fi
         ;;
 esac

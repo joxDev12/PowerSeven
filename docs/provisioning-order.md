@@ -113,12 +113,20 @@ trust store su VPS12/VPS13. Abilitare LDAPS dopo certificato valido.
 
 Test: `openssl s_client`, bind LDAP/LDAPS, subject/SAN e trust.
 
-## PHASE 9 — database e runtime
+## PHASE 9 — CP5 database foundation
 
-Installare PostgreSQL, MariaDB e Redis vuoti. Creare solo database, ruoli,
-grant e password referenziate. Avviare reti Docker e volumi vuoti.
+Il runner `setup-powerseven.ps1 -Apply -Checkpoint 5` installa PostgreSQL 18.6
+e MariaDB 10.11.14 come servizi host su VPS14, dopo CP1–CP4. Crea soltanto i
+database mancanti `forgejo`, `nextcloud` e `panel`; verifica e conserva il
+database standard `postgres`. I bind sono loopback e `192.168.214.14`, protetti
+dalla policy CP3 sulla NIC Bridged. L'amministrazione usa peer/socket locale.
 
-Test: listener locali, login con secret ref, database attesi, nessun restore.
+CP5 non crea utenti/ruoli, grants, password, schema applicativi, Redis o
+container. Compose non definisce ancora i nomi dei login/database completi;
+deciderli è prerequisito della successiva configurazione delle applicazioni.
+Check resta read-only e verifica versione, cluster, servizio, socket, storage,
+autenticazione locale, database e isolamento. Verifica inoltre quale processo
+ascolta sulla porta 53 senza modificare il resolver.
 
 ## PHASE 10 — applicazioni
 
@@ -132,6 +140,9 @@ Installare/configurare nuovi:
 6. Pterodactyl Panel su MariaDB.
 
 Configurare LDAP/LDAPS dove previsto. Dati applicativi restano vuoti.
+Prima di avviare Forgejo, Nextcloud o Pterodactyl, definire i ruoli e i grants
+DB che il repository oggi non modella, fornire i soli secret applicativi fuori
+Git, predisporre Redis/certificati/LDAP e validare le configurazioni runtime.
 
 ## PHASE 11 — Pterodactyl runtime
 

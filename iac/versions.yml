@@ -53,15 +53,17 @@ versions:
   - name: PostgreSQL
     target_version: "18.6"
     version_policy: pin_minor
-    installation_source: PostgreSQL official repository or approved package
+    installation_source: PostgreSQL official PGDG Noble APT repository
     pin_required: true
-    notes: observed source version; fresh empty databases only
+    package: postgresql-18
+    notes: PGDG Noble amd64 candidate verified as 18.6; install only when data path is empty; never upgrade an existing package
   - name: MariaDB
     target_version: "10.11.14"
     version_policy: pin_minor
-    installation_source: MariaDB official repository or approved package
+    installation_source: Ubuntu Noble official APT repository
     pin_required: true
-    notes: observed source version; fresh empty panel database only
+    package: mariadb-server
+    notes: Noble candidate verified as 10.11.14; install only when data path is empty; never upgrade an existing package
   - name: Redis
     target_version: REQUIRED_DECISION
     version_policy: supported_stable

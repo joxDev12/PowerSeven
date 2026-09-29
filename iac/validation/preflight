@@ -385,7 +385,7 @@ def check_vps14_cp4():
     else:
         report("FAIL", "cp4-dpkg-version-parser", "installed Docker package version parsing is missing or retains status padding")
 
-    cp4_match = re.search(r"docker_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nwhile \[\[ \$# -gt 0 \]\])", bootstrap, re.DOTALL)
+    cp4_match = re.search(r"docker_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\ndatabase_package_version\(\))", bootstrap, re.DOTALL)
     check_match = re.search(r"docker_foundation_check\(\) \{(?P<body>.*?)(?=\n\}\n\ninstall_docker_firewall_integration\(\))", bootstrap, re.DOTALL)
     diagnostics_match = re.search(r"docker_app_diagnostics\(\) \{(?P<body>.*?)(?=\n\}\n\ndocker_foundation_check\(\))", bootstrap, re.DOTALL)
     cp4_body = cp4_match.group("body") if cp4_match else ""
@@ -550,6 +550,266 @@ def check_vps14_cp4():
         report("WARN", "cp4-compose-config", "Docker CLI unavailable; the Compose runtime config check was not run")
 
 
+def check_vps14_cp5():
+    bootstrap = (IAC / "linux" / "bootstrap.sh").read_text(encoding="utf-8")
+    runner = (IAC / "windows" / "setup-powerseven.ps1").read_text(encoding="utf-8")
+    compose = load_yaml(IAC / "docker" / "compose.yml")
+    services = load_yaml(IAC / "inventory" / "services.yml")
+    storage = load_yaml(IAC / "inventory" / "storage.yml")
+    versions = {item["name"]: item for item in load_yaml(IAC / "versions.yml")["versions"]}
+    control = load_yaml(IAC / "service-control" / "dependency-map.yml")
+    docker_env = {}
+    for line in (IAC / "docker" / ".env.example").read_text(encoding="utf-8").splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            key, value = line.split("=", 1)
+            docker_env[key] = value
+
+    pg_target = versions["PostgreSQL"]["target_version"]
+    maria_target = versions["MariaDB"]["target_version"]
+    declared = {
+        "version": re.search(r"^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'$", bootstrap, re.MULTILINE),
+        "capabilities": re.search(r"^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([^']+)'$", bootstrap, re.MULTILINE),
+        "postgres_version": re.search(r"^readonly POSTGRESQL_VERSION='([^']+)'$", bootstrap, re.MULTILINE),
+        "mariadb_version": re.search(r"^readonly MARIADB_VERSION='([^']+)'$", bootstrap, re.MULTILINE),
+        "bind": re.search(r"^readonly DATABASE_BIND_ADDRESSES='([^']+)'$", bootstrap, re.MULTILINE),
+        "pg_databases": re.search(r"^readonly POSTGRESQL_DATABASES=\(([^)]*)\)$", bootstrap, re.MULTILINE),
+        "maria_databases": re.search(r"^readonly MARIADB_DATABASES=\(([^)]*)\)$", bootstrap, re.MULTILINE),
+        "postgres_package": re.search(r"^readonly POSTGRESQL_PACKAGE='([^']+)'$", bootstrap, re.MULTILINE),
+        "mariadb_package": re.search(r"^readonly MARIADB_PACKAGE='([^']+)'$", bootstrap, re.MULTILINE),
+    }
+    contract_ok = (
+        all(declared.values())
+        and declared["version"].group(1) == "16"
+        and declared["capabilities"].group(1) == "1,2,3,4,5"
+        and declared["postgres_version"].group(1) == pg_target
+        and declared["mariadb_version"].group(1) == maria_target
+        and declared["postgres_package"].group(1) == versions["PostgreSQL"].get("package") == "postgresql-18"
+        and declared["mariadb_package"].group(1) == versions["MariaDB"].get("package") == "mariadb-server"
+        and declared["bind"].group(1) == "127.0.0.1,192.168.214.14"
+        and set(declared["pg_databases"].group(1).split()) | {"postgres"} == {"forgejo", "nextcloud", "postgres"}
+        and set(declared["maria_databases"].group(1).split()) == {"panel"}
+        and "ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')" in runner
+        and versions["PostgreSQL"].get("installation_source") == "PostgreSQL official PGDG Noble APT repository"
+        and versions["MariaDB"].get("installation_source") == "Ubuntu Noble official APT repository"
+    )
+    if contract_ok:
+        report("PASS", "cp5-contract", "bootstrap v16 exposes CP5 and uses the declared DB versions, target bind and inventory database names")
+    else:
+        report("FAIL", "cp5-contract", "CP5 contract/version/database constants differ from the declared target")
+
+    db_services = {item.get("graph_id"): item for item in services.get("services", [])}
+    pg = db_services.get("db_postgresql", {})
+    maria = db_services.get("db_mariadb", {})
+    storage_nodes = {item.get("graph_id"): item for item in storage.get("recreatable_infrastructure", [])}
+    pg_store = storage_nodes.get("datastore_postgresql", {})
+    maria_store = storage_nodes.get("datastore_mariadb", {})
+    app_dependencies = {
+        item.get("graph_id"): set(item.get("depends_on", []))
+        for item in services.get("services", [])
+    }
+    expected_model = (
+        pg.get("databases") == ["forgejo", "nextcloud", "postgres"]
+        and maria.get("databases") == ["panel"]
+        and pg.get("listen") == ["127.0.0.1:5432", "192.168.214.14:5432"]
+        and maria.get("listen") == ["127.0.0.1:3306", "192.168.214.14:3306"]
+        and pg.get("admin_authentication") == "local_peer"
+        and maria.get("admin_authentication") == "root_unix_socket"
+        and pg.get("systemd_unit") == control.get("shared_dependencies", {}).get("postgresql", {}).get("systemd_unit") == "postgresql@18-main.service"
+        and "db_postgresql" in app_dependencies.get("app_nextcloud", set())
+        and "db_postgresql" in app_dependencies.get("app_forgejo", set())
+        and "db_mariadb" in app_dependencies.get("app_pterodactyl", set())
+        and set(pg_store.get("databases", [])) == set(pg.get("databases", []))
+        and set(maria_store.get("databases", [])) == set(maria.get("databases", []))
+        and pg_store.get("data_directory") == "/var/lib/postgresql/18/main"
+        and maria_store.get("data_directory") == "/var/lib/mysql"
+        and pg_store.get("data") == ["empty databases"]
+        and maria_store.get("data") == ["empty database"]
+        and pg.get("application_role_names") == "not_modelled"
+        and maria.get("application_role_names") == "not_modelled"
+    )
+    if expected_model:
+        report("PASS", "cp5-database-model", "Forgejo/Nextcloud -> PostgreSQL; Pterodactyl Panel -> MariaDB; only repository-defined databases are targeted")
+    else:
+        report("FAIL", "cp5-database-model", "database consumers, target bind, storage or role-model declaration drifted")
+
+    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+    graph_nodes = {item.get("id"): item.get("properties", {}) for item in graph.get("nodes", [])}
+    graph_pg = graph_nodes.get("db_postgresql", {})
+    graph_maria = graph_nodes.get("db_mariadb", {})
+    graph_ok = (
+        graph_pg.get("bind") == ["127.0.0.1", "192.168.214.14"]
+        and graph_pg.get("databases") == pg.get("databases")
+        and graph_pg.get("application_role_names") == "not_modelled"
+        and graph_maria.get("bind") == ["127.0.0.1", "192.168.214.14"]
+        and graph_maria.get("databases") == maria.get("databases")
+        and graph_maria.get("application_role_names") == "not_modelled"
+    )
+    if graph_ok:
+        report("PASS", "cp5-graph-model", "Graphify DB nodes match the current target-local bind, database names and unmodeled roles")
+    else:
+        report("FAIL", "cp5-graph-model", "database graph nodes drifted from the target-local service/storage inventory")
+
+    cp5_order = next(
+        (item for item in load_yaml(IAC / "inventory" / "dependencies.yml")["provisioning_order"] if item.get("checkpoint") == "CP5"),
+        None,
+    )
+    if (
+        cp5_order
+        and cp5_order.get("phase") == "vps14_database_foundation"
+        and set(cp5_order.get("provides", [])) == {"db_postgresql", "db_mariadb"}
+        and cp5_order.get("requires_checkpoints") == ["CP1", "CP2", "CP3", "CP4"]
+    ):
+        report("PASS", "cp5-dependency-order", "CP5 is a separate database-foundation step after CP1–CP4")
+    else:
+        report("FAIL", "cp5-dependency-order", "CP5 dependency ordering or scope is not declared separately")
+
+    cluster_parser = re.search(
+        r"awk -v required=\"\$require_target\" '(?P<body>.*?)'\s+<<< \"\$clusters\"",
+        bootstrap,
+        re.DOTALL,
+    )
+    cluster_fixtures = [
+        ("18 main 5432 down postgres /var/lib/postgresql/18/main /var/log/postgresql/postgresql-18-main.log\n", "yes", 0),
+        ("17 main 5432 online postgres /var/lib/postgresql/17/main /var/log/postgresql/postgresql-17-main.log\n", "yes", 1),
+        ("18 main 5432 online postgres /var/lib/postgresql/18/main /var/log/postgresql/postgresql-18-main.log\n"
+         "17 legacy 5433 down postgres /var/lib/postgresql/17/legacy /var/log/postgresql/postgresql-17-legacy.log\n", "no", 1),
+        ("", "yes", 1),
+        ("", "no", 0),
+    ]
+    if cluster_parser and shutil.which("awk"):
+        cluster_fixtures_ok = all(
+            subprocess.run(
+                ["awk", "-v", f"required={required}", cluster_parser.group("body")],
+                input=fixture,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode == expected
+            for fixture, required, expected in cluster_fixtures
+        )
+    else:
+        cluster_fixtures_ok = False
+    if cluster_fixtures_ok:
+        report("PASS", "cp5-postgresql-cluster-fixtures", "allows only the target cluster; rejects wrong, extra and missing required clusters")
+    else:
+        report("FAIL", "cp5-postgresql-cluster-fixtures", "PostgreSQL cluster-layout guard or its parser fixtures failed")
+
+    compose_has_host_db = (
+        docker_env.get("POSTGRES_HOST") == "192.168.214.14"
+        and docker_env.get("POSTGRES_PORT") == "5432"
+        and docker_env.get("MARIADB_HOST") == "192.168.214.14"
+        and docker_env.get("MARIADB_PORT") == "3306"
+        and not any("postgres" in name.lower() or "maria" in name.lower() for name in compose.get("services", {}))
+    )
+    if compose_has_host_db:
+        report("PASS", "cp5-compose-boundary", "Compose keeps database engines on the host and points future clients at VPS14 underlay")
+    else:
+        report("FAIL", "cp5-compose-boundary", "Compose database host/port or host-versus-container model drifted")
+
+    check_match = re.search(
+        r"database_foundation_check\(\) \{(?P<body>.*?)(?=\n\}\n\ndatabase_checkpoint\(\))",
+        bootstrap,
+        re.DOTALL,
+    )
+    apply_match = re.search(
+        r"database_checkpoint\(\) \{(?P<body>.*?)(?=\n\}\n\nwhile \[\[ \$# -gt 0 \]\])",
+        bootstrap,
+        re.DOTALL,
+    )
+    create_match = re.search(r"ensure_empty_database\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    check_body = check_match.group("body") if check_match else ""
+    apply_body = apply_match.group("body") if apply_match else ""
+    create_body = create_match.group("body") if create_match else ""
+    readonly_helpers = []
+    for function in (
+        "database_os_is_supported", "database_cp1_storage_ready", "detect_root", "detect_lvm", "verify_root_mount", "read_lvm_sizes",
+        "postgres_query", "postgres_cluster_layout_is_safe", "mariadb_query", "mariadb_root_uses_unix_socket",
+        "database_storage_ready", "database_listener_addresses", "detect_network_interfaces", "verify_network_state",
+        "admin_firewall_is_ready", "docker_firewall_is_ready", "docker_runtime_files_are_ready",
+    ):
+        match = re.search(rf"(?m)^{function}\(\) \{{(?P<body>.*?)(?=\n\}})", bootstrap, re.DOTALL)
+        readonly_helpers.append(match.group("body") if match else "MISSING_HELPER")
+    cp1_guard_position = apply_body.find("database_cp1_storage_ready")
+    repository_apply_position = apply_body.find("postgres_repository")
+    mariadb_preinstall_stage_position = apply_body.find("ensure_mariadb_bind_config '127.0.0.1'")
+    package_install_position = apply_body.find("database_prepare_packages")
+    maria_user_guard_position = apply_body.find("maria_users=$(mariadb_query")
+    maria_bind_position = apply_body.find("ensure_mariadb_bind_config \"$DATABASE_BIND_ADDRESSES\"")
+    mutators = re.compile(
+        r"\b(?:apt-get|ALTER\s+SYSTEM|CREATE\s+DATABASE|GRANT|DROP|DELETE\s+FROM|systemctl\s+(?:enable|start|restart|stop)|docker\s+compose\s+(?:up|down))\b|(?:^|[\n\";])\s*CREATE\s+(?:USER|ROLE)\b",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    report_fn = re.search(r"report\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    report_body = report_fn.group("body") if report_fn else ""
+    pg_bind_match = re.search(r"ensure_postgresql_bind_config\(\) \{(?P<body>.*?)(?=\n\})", bootstrap, re.DOTALL)
+    pg_bind_body = pg_bind_match.group("body") if pg_bind_match else ""
+    pg_guarded_bind = (
+        "current_setting('server_version')" in pg_bind_body
+        and '[[ "$version" == "$POSTGRESQL_VERSION" ]]' in pg_bind_body
+        and "pg_hba_file_rules" in pg_bind_body
+        and "[[ \"$hba\" == $'0\\t0\\tpeer' ]]" in pg_bind_body
+        and pg_bind_body.find("pg_hba_file_rules") < pg_bind_body.find("ALTER SYSTEM")
+    )
+    readonly_ok = (
+        check_match is not None
+        and "postgres_query" in check_body
+        and "mariadb_query" in check_body
+        and "pg_hba_file_rules" in check_body
+        and "mysql.user" in check_body
+        and "mariadb_root_uses_unix_socket" in check_body
+        and "database_listener_addresses" in check_body
+        and "database_storage_ready" in check_body
+        and "database_cp1_storage_ready" in check_body
+        and "database_os_is_supported" in check_body
+        and "postgres_cluster_layout_is_safe yes" in check_body
+        and "ss -H -lntup 'sport = :53'" in check_body
+        and "MISSING_HELPER" not in readonly_helpers
+        and not mutators.search(check_body + "\n".join(readonly_helpers))
+        and "CHECKPOINT" in report_body
+        and "'5'" in report_body
+        and "5)" in bootstrap[bootstrap.find("case \"$CHECKPOINT\" in") :]
+        and "CHECK_NEEDS_APPLY" in bootstrap[bootstrap.find("    5)\n        database_checkpoint") :]
+    )
+    if readonly_ok:
+        report("PASS", "cp5-check-readonly", "Check probes CP1 storage, CP2–CP4, DB cluster/service/version/bind/auth/data/listeners and port 53 without remediation")
+    else:
+        report("FAIL", "cp5-check-readonly", "CP5 Check is missing an observation or contains a mutating operation")
+
+    safe_apply = (
+        apply_match is not None
+        and "if [[ \"$MODE\" == 'check' ]]; then database_foundation_check" in apply_body
+        and cp1_guard_position >= 0
+        and repository_apply_position >= 0
+        and cp1_guard_position < repository_apply_position
+        and apply_body.index("database_foundation_check") < apply_body.index("postgres_repository")
+        and apply_body.find("database_package_version \"$MARIADB_PACKAGE\"") < mariadb_preinstall_stage_position < package_install_position
+        and "apt-get install --no-remove --no-upgrade" in bootstrap
+        and "database_empty_path" in bootstrap
+        and "CREATE DATABASE $database" in create_body
+        and "postgres_cluster_layout_is_safe" in apply_body
+        and "mariadb_root_uses_unix_socket" in apply_body
+        and "systemctl start \"$POSTGRESQL_UNIT\"" in apply_body
+        and maria_user_guard_position >= 0
+        and maria_bind_position >= 0
+        and maria_user_guard_position < maria_bind_position
+        and "ensure_mariadb_bind_config '127.0.0.1'" in apply_body
+        and pg_guarded_bind
+        and "preserving it instead of upgrading/replacing it" in bootstrap
+        and "DROP" not in bootstrap[bootstrap.find("database_checkpoint() {") : bootstrap.find("\n}\n\nwhile [[")]
+        and "ALTER ROLE" not in bootstrap[bootstrap.find("database_checkpoint() {") : bootstrap.find("\n}\n\nwhile [[")]
+        and "docker compose up" not in apply_body
+        and "ensure_empty_database" in apply_body
+    )
+    if safe_apply:
+        report("PASS", "cp5-apply-idempotent", "Apply pins package candidates, forbids upgrades/removals, preserves data, creates only absent DBs and never starts containers")
+    else:
+        report("FAIL", "cp5-apply-idempotent", "Apply can upgrade, reset data, invent roles, or start containers")
+    if pg_guarded_bind:
+        report("PASS", "cp5-postgresql-bind-guard", "cluster version, local peer and pg_hba allowlist are checked before ALTER SYSTEM changes the listener")
+    else:
+        report("FAIL", "cp5-postgresql-bind-guard", "PostgreSQL bind could change before its version/authentication policy is verified")
+
+
 def main() -> int:
     check_yaml_json()
     graph = json.loads(GRAPH.read_text(encoding="utf-8"))
@@ -570,6 +830,7 @@ def main() -> int:
     check_scope_separation(inventories)
     check_compose()
     check_vps14_cp4()
+    check_vps14_cp5()
     print(f"SUMMARY: PASS={PASS} WARN={WARN} FAIL={FAIL}")
     return 1 if FAIL else 0
 

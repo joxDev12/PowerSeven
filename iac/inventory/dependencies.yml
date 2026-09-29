@@ -66,64 +66,71 @@ provisioning_order:
     provides: [svc_wireguard_hub, svc_wireguard_vps12, svc_wireguard_vps13, net_wireguard]
     requires: [underlay_vps12, underlay_vps13, underlay_vps14]
   - order: 8
-    phase: certificates_and_empty_databases
+    phase: vps14_database_foundation
+    checkpoint: CP5
+    requires_checkpoints: [CP1, CP2, CP3, CP4]
     parallel: true
-    provides: [cert_soc_lab_ca, id_ldaps, db_postgresql, db_mariadb, db_redis]
-    requires: [id_ad_ds, app_adguard, svc_docker]
-    data_policy: create_empty_datastores_only
-    service_control_note: PostgreSQL is shared on demand by Forgejo and Nextcloud; lifecycle is postgresql@18-main.service; dashboard is AD-only
+    provides: [db_postgresql, db_mariadb]
+    requires: [underlay_vps14, svc_wireguard_hub, svc_docker]
+    data_policy: create_only_missing_empty_databases; preserve_existing_data_and_clusters
+    service_control_note: PostgreSQL is shared on demand by Forgejo and Nextcloud; lifecycle is postgresql@18-main.service; MariaDB serves Pterodactyl Panel; application credentials are not modeled
   - order: 9
+    phase: certificates_ldap_and_redis_foundation
+    parallel: true
+    provides: [cert_soc_lab_ca, id_ldaps, db_redis]
+    requires: [id_ad_ds, app_adguard, svc_docker, db_postgresql, db_mariadb]
+  - order: 10
     phase: application_deployment
     parallel: true
     provides: [application_deployment, app_nextcloud, app_forgejo, app_stirling, app_portal, app_scribble]
     requires: [svc_docker, db_postgresql, db_redis, id_ldap, cert_soc_lab_ca]
     data_policy: fresh_install_no_application_data_restore
-  - order: 10
+  - order: 11
     phase: pterodactyl_panel
     parallel: false
     provides: [app_pterodactyl]
     requires: [db_mariadb]
     dependency_kind: panel_before_workers
-  - order: 11
+  - order: 12
     phase: pterodactyl_wings_configuration
     parallel: false
     provides: [wings_configuration]
     requires: [app_pterodactyl, db_mariadb]
     dependency_kind: configuration_after_panel
-  - order: 12
+  - order: 13
     phase: pterodactyl_runtime_workers
     parallel: false
     provides: [svc_wings]
     requires: [wings_configuration, app_pterodactyl, svc_docker]
     dependency_kind: wings_runtime_after_configuration_and_docker
-  - order: 13
+  - order: 14
     phase: pterodactyl_queue_worker
     parallel: false
     provides: [svc_pteroq]
     requires: [svc_wings, app_pterodactyl, db_mariadb]
     dependency_kind: pteroq_after_wings
-  - order: 14
+  - order: 15
     phase: nginx_and_firewall
     parallel: false
     provides: [svc_nginx, cfg_windows_firewall]
     requires: [cert_soc_lab_ca, application_deployment]
-  - order: 15
+  - order: 16
     phase: wazuh_fresh_install
     parallel: false
     provides: [mon_manager, mon_indexer, mon_dashboard]
     requires: [svc_wireguard_hub]
     data_policy: fresh_index_empty_history
-  - order: 16
+  - order: 17
     phase: vps12_domain_join_and_desktop
     parallel: false
     provides: [svc_wireguard_vps12, svc_sssd, svc_xfce, svc_xrdp]
     requires: [os_vps12, svc_wireguard_hub, id_ad_ds, id_dns_dc02, id_kerberos, id_ldap]
-  - order: 17
+  - order: 18
     phase: monitoring_agents
     parallel: true
     provides: [mon_agent_vps12, mon_agent_dc02]
     requires: [mon_manager, svc_wireguard_vps12, id_ad_ds]
-  - order: 18
+  - order: 19
     phase: end_to_end_validation
     parallel: false
     provides: [local_acceptance_report]
