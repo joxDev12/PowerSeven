@@ -13,7 +13,7 @@ dichiarativi.
 - aggiornamenti e upgrade pacchetti sono disabilitati nei template;
 - `bootstrap.sh --check/--apply --checkpoint 1` rileva root/LVM e, in Apply,
   espande solo il free space già disponibile nel VG;
-- il contratto corrente del bootstrap è la versione `12`; ogni modifica
+- il contratto corrente del bootstrap è la versione `13`; ogni modifica
   incompatibile o comportamentale richiede l'incremento esplicito della
   versione, anche quando le capabilities restano `checkpoints=1,2,3`;
 - `--protocol` espone versione e capabilities con output deterministico in un
@@ -74,14 +74,17 @@ definitiva include un reboot controllato e un nuovo `--check --checkpoint 2`.
 
 ```bash
 sudo ./iac/linux/bootstrap.sh --check --checkpoint 3
-sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3
-sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3 --cleanup-client jarvis
-sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3 --cleanup-client giorgio-laptop
+sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3 --peer-list desktop,portatile,surface
+sudo ./iac/linux/bootstrap.sh --peer-status
+sudo ./iac/linux/bootstrap.sh --apply --checkpoint 3 --cleanup-client desktop
 ```
 
 Il checkpoint configura `wg-admin` (`10.99.0.1/24`, UDP/51820), forwarding
-IPv4, firewall nftables dedicato e i peer `jarvis` (`10.99.0.2/32`) e
-`giorgio-laptop` (`10.99.0.3/32`). Ogni configurazione client viene
+IPv4, firewall nftables dedicato e i peer scelti al primo Apply. I nomi sono
+salvati in `/var/lib/powerseven/admin-vpn/peers` e ricevono indirizzi da
+`10.99.0.2/32` in avanti. Un rerun conserva l'inventario e non rigenera i peer
+esistenti. La migrazione v13 ricava nomi e indirizzi dai public key file e da
+`wg-admin.conf`, senza cambiare le chiavi. Ogni configurazione client viene
 generata solo dopo che il firewall nftables è caricato e verificato; l'unità
 WireGuard richiede l'unità firewall anche al boot. Il check confronta le
 regole nftables in esecuzione con la policy attesa.

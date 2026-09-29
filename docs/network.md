@@ -17,8 +17,8 @@ WireGuard `10.10.10.0/24`.
 VPS14 ha due NIC: VMnet8 statico `192.168.214.14/24`, gateway unico
 `192.168.214.2`, DNS `192.168.214.13`; e una NIC Bridged DHCP senza default
 route e senza DNS. Il VPN amministrativo separato usa `wg-admin`
-`10.99.0.0/24` (`10.99.0.1` VPS14, `10.99.0.2` Jarvis,
-`10.99.0.3` giorgio-laptop) e raggiunge VMnet8.
+`10.99.0.0/24` (`10.99.0.1` VPS14; client assegnati da `10.99.0.2`
+secondo l'inventario persistente scelto al primo CP3) e raggiunge VMnet8.
 DC02 mantiene la route persistente `10.99.0.0/24 via 192.168.214.14`.
 
 I bridge Docker di VPS14 includono `172.18.0.0/16`, `172.19.0.0/16`,

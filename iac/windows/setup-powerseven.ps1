@@ -4,6 +4,7 @@ param(
     [string]$UbuntuUsername,
     [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
     [string]$Checkpoint = '1',
+    [string[]]$PeerNames = @(),
     [switch]$Check,
     [switch]$Apply,
     [switch]$PrepareBootstrap
@@ -11,7 +12,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '12'
+$requiredBootstrapVersion = '13'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -606,7 +607,7 @@ function New-RemoteCheckpointArguments {
         [string]$Action,
         [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
         [string]$Checkpoint,
-        [ValidateSet('', '--network-token', '--confirm-network', '--cleanup-client')]
+        [ValidateSet('', '--network-token', '--confirm-network', '--cleanup-client', '--peer-list')]
         [string]$ExtraOption = '',
         [string]$ExtraValue = ''
     )
@@ -621,7 +622,12 @@ function New-RemoteCheckpointArguments {
         [string]$Checkpoint
     )
     if ($ExtraOption -eq '--cleanup-client') {
-        if ($ExtraValue -notin @('jarvis', 'giorgio-laptop')) { throw 'Unknown admin VPN peer' }
+        if ($ExtraValue -cnotmatch '^[a-z][a-z0-9_-]{0,31}$') { throw 'Invalid admin VPN peer name' }
+        $arguments += @($ExtraOption, $ExtraValue)
+    } elseif ($ExtraOption -eq '--peer-list') {
+        if ($Checkpoint -ne '3' -or $Action -ne '--apply' -or $ExtraValue -cnotmatch '^[a-z][a-z0-9_-]{0,31}(,[a-z][a-z0-9_-]{0,31})*$') {
+            throw 'Invalid initial admin VPN peer list'
+        }
         $arguments += @($ExtraOption, $ExtraValue)
     } elseif (-not [string]::IsNullOrWhiteSpace($ExtraOption)) {
         if ([string]::IsNullOrWhiteSpace($ExtraValue) -or $ExtraValue -notmatch '^[a-f0-9]{32}$') {
@@ -676,7 +682,11 @@ if [[ "$#" -eq 5 ]]; then
             echo 'invalid network transaction token' >&2; exit 2
         fi
     elif [[ "$3" == '3' ]]; then
-        if [[ "$4" != '--cleanup-client' || "$5" != 'jarvis' && "$5" != 'giorgio-laptop' ]]; then
+        if [[ "$4" == '--cleanup-client' ]]; then
+            [[ "$5" =~ ^[a-z][a-z0-9_-]{0,31}$ ]] || { echo 'invalid admin VPN peer' >&2; exit 2; }
+        elif [[ "$4" == '--peer-list' ]]; then
+            [[ "$5" =~ ^[a-z][a-z0-9_-]{0,31}(,[a-z][a-z0-9_-]{0,31})*$ ]] || { echo 'invalid admin VPN peer list' >&2; exit 2; }
+        else
             echo 'invalid admin VPN peer' >&2; exit 2
         fi
     else
@@ -771,68 +781,51 @@ function Remove-DC02AdminRoute {
     Write-Result 'WARN' 'dc02-route' 'new administrative VPN route removed during rollback'
 }
 
-function Get-EnabledRdpFirewallRules {
-    $rules = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction Stop)
-    $matchedRules = @()
-    foreach ($rule in $rules) {
-        $portFilters = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue)
-        foreach ($filter in $portFilters) {
-            $localPort = @($filter.LocalPort | ForEach-Object { [string]$_ })
-            if ($filter.Protocol -eq 'TCP' -and $localPort -contains '3389') {
-                $matchedRules += $rule
-                break
-            }
-        }
+function Test-ManagedRdpRule {
+    param([string]$Name, [string]$Action, [string[]]$RemoteAddress, [string]$LocalAddress)
+    foreach ($store in @('PersistentStore', 'ActiveStore')) {
+        $rules = @(Get-NetFirewallRule -Name $Name -PolicyStore $store -ErrorAction SilentlyContinue)
+        if ($rules.Count -ne 1) { return $false }
+        $rule = $rules[0]
+        if ($rule.Direction -ne 'Inbound' -or $rule.Action -ne $Action -or $rule.Enabled -ne 'True' -or $rule.Profile -ne 'Any') { return $false }
+        $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+        $address = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+        if ($port.Protocol -ne 'TCP' -or @($port.LocalPort).Count -ne 1 -or [string]$port.LocalPort -ne '3389') { return $false }
+        if (@($address.LocalAddress).Count -ne 1 -or [string]$address.LocalAddress -ne $LocalAddress) { return $false }
+        if ((@($address.RemoteAddress | Sort-Object) -join ',') -ne (@($RemoteAddress | Sort-Object) -join ',')) { return $false }
     }
-    return $matchedRules
+    return $true
+}
+
+function Test-DC02RdpFirewall {
+    $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
+    if ($profiles.Count -ne 3 -or @($profiles | Where-Object { $_.Enabled -ne 'True' }).Count -gt 0) { return $false }
+    $outside = @('0.0.0.0-10.98.255.255', '10.99.1.0-255.255.255.255', '::/0')
+    return ((Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-BlockOutside' -Action Block -RemoteAddress $outside -LocalAddress Any) -and
+        (Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-Allow' -Action Allow -RemoteAddress @('10.99.0.0/24') -LocalAddress '192.168.214.13'))
 }
 
 function Ensure-DC02RdpFirewall {
-    $rules = @(Get-EnabledRdpFirewallRules)
-    if ($rules.Count -eq 0) {
-        throw 'No explicit enabled inbound TCP/3389 rule was found; refusing to create a parallel rule that could leave a broader RDP rule active'
+    $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
+    if ($profiles.Count -ne 3 -or @($profiles | Where-Object { $_.Enabled -ne 'True' }).Count -gt 0) {
+        throw 'Windows Defender Firewall must be enabled in all active profiles before CP3 can protect RDP'
     }
-    $state = @()
-    try {
-        foreach ($rule in $rules) {
-            $addressFilter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-            $state += [pscustomobject]@{
-                Name = $rule.Name
-                RemoteAddress = @($addressFilter.RemoteAddress)
-            }
-            $addressFilter | Set-NetFirewallAddressFilter -RemoteAddress '10.99.0.0/24' -ErrorAction Stop
-        }
+    $outside = @('0.0.0.0-10.98.255.255', '10.99.1.0-255.255.255.255', '::/0')
+    $blockName = 'PowerSeven-AdminVPN-RDP-BlockOutside'
+    $allowName = 'PowerSeven-AdminVPN-RDP-Allow'
+    $block = @(Get-NetFirewallRule -Name $blockName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+    if ($block.Count -eq 0) {
+        New-NetFirewallRule -Name $blockName -DisplayName 'PowerSeven RDP block outside admin VPN' -Direction Inbound -Action Block -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -RemoteAddress $outside -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
     }
-    catch {
-        foreach ($entry in @($state)) {
-            $previousRule = Get-NetFirewallRule -Name $entry.Name -ErrorAction SilentlyContinue
-            if ($null -ne $previousRule) {
-                Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $previousRule -ErrorAction SilentlyContinue |
-                    Set-NetFirewallAddressFilter -RemoteAddress $entry.RemoteAddress -ErrorAction SilentlyContinue
-            }
-        }
-        throw
+    if (-not (Test-ManagedRdpRule -Name $blockName -Action Block -RemoteAddress $outside -LocalAddress Any)) {
+        throw 'PowerSeven RDP block rule is missing or differs from the effective policy'
     }
-    Write-Result 'PASS' 'dc02-rdp-firewall' "RDP rules limited to 10.99.0.0/24 ($($rules.Count) rule(s))"
-    return @{ Created = $false; Rules = $state }
-}
-
-function Restore-DC02RdpFirewall {
-    param([hashtable]$FirewallState)
-    if ($null -eq $FirewallState) { return }
-    if ($FirewallState.Created) {
-        Remove-NetFirewallRule -Name 'PowerSeven-AdminVPN-RDP' -ErrorAction SilentlyContinue
-        Write-Result 'WARN' 'dc02-rdp-firewall' 'new RDP rule removed during rollback'
-        return
+    $allow = @(Get-NetFirewallRule -Name $allowName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+    if ($allow.Count -eq 0) {
+        New-NetFirewallRule -Name $allowName -DisplayName 'PowerSeven RDP allow from admin VPN' -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -LocalAddress '192.168.214.13' -RemoteAddress '10.99.0.0/24' -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
     }
-    foreach ($entry in @($FirewallState.Rules)) {
-        $previousRule = Get-NetFirewallRule -Name $entry.Name -ErrorAction SilentlyContinue
-        if ($null -ne $previousRule) {
-            Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $previousRule -ErrorAction SilentlyContinue |
-                Set-NetFirewallAddressFilter -RemoteAddress $entry.RemoteAddress -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Result 'WARN' 'dc02-rdp-firewall' 'previous RDP remote-address filters restored during rollback'
+    if (-not (Test-DC02RdpFirewall)) { throw 'PowerSeven RDP allow/block policy is not effective' }
+    Write-Result 'PASS' 'dc02-rdp-firewall' 'managed TCP/3389 block outside VPN and allow from 10.99.0.0/24 are effective'
 }
 
 function Test-AdminClientConfig {
@@ -847,6 +840,62 @@ function Test-AdminClientConfig {
         $content -match '(?m)^Endpoint = \S+:51820$' -and
         ($Endpoint -eq '' -or $content -match ("(?m)^Endpoint = {0}$" -f [regex]::Escape($Endpoint))) -and
         $content -match '(?m)^PrivateKey = \S+$')
+}
+
+function Get-RemoteAdminPeers {
+    param([string]$Target, [string[]]$SshOptions)
+    $result = Invoke-NativeCapture $script:Ssh ($SshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--peer-status'))
+    if ($result.ExitCode -ne 0) { throw 'remote admin VPN peer-state probe failed' }
+    $output = $result.StandardOutput.Replace("`r", '').Trim()
+    if ($output.Length -eq 0) { return @() }
+    $peers = @()
+    $seen = @{}
+    foreach ($line in ($output -split "`n")) {
+        if ($line -cnotmatch '^([a-z][a-z0-9_-]{0,31})\|(10\.99\.0\.([0-9]{1,3})/32)\|(absent|staged|exported|invalid)$') {
+            throw 'remote admin VPN peer-state protocol is invalid'
+        }
+        $name = $Matches[1]
+        $address = $Matches[2]
+        $octet = [int]$Matches[3]
+        $status = $Matches[4]
+        if ($seen.ContainsKey($name) -or $octet -ne ($peers.Count + 2) -or $peers.Count -ge 253 -or $status -eq 'invalid') {
+            throw 'remote admin VPN peer inventory is inconsistent'
+        }
+        $seen[$name] = $true
+        $peers += @{ Name = $name; Address = $address; Status = $status }
+    }
+    return $peers
+}
+
+function Resolve-AdminPeerNames {
+    param([array]$ExistingPeers, [string[]]$RequestedNames)
+    $names = @($RequestedNames)
+    if ($ExistingPeers.Count -eq 0 -and $names.Count -eq 0) {
+        $countText = Read-Host 'Quanti dispositivi VPN amministrativi vuoi creare (1-253)?'
+        $count = 0
+        if (-not [int]::TryParse($countText, [ref]$count) -or $count -lt 1 -or $count -gt 253) {
+            throw 'Peer count must be between 1 and 253; rerun with -PeerNames to automate setup'
+        }
+        for ($index = 1; $index -le $count; $index++) {
+            $names += Read-Host ("Nome del dispositivo VPN {0}/{1}" -f $index, $count)
+        }
+    }
+    if ($names.Count -eq 0) { return @($ExistingPeers | ForEach-Object { $_.Name }) }
+    if ($names.Count -gt 253) { throw 'At most 253 admin VPN peers are supported' }
+    $normalized = @()
+    $seen = @{}
+    foreach ($name in $names) {
+        $canonical = $name.Trim().ToLowerInvariant()
+        if ($canonical -cnotmatch '^[a-z][a-z0-9_-]{0,31}$' -or $seen.ContainsKey($canonical)) {
+            throw "Invalid or duplicate admin VPN peer name: $name"
+        }
+        $seen[$canonical] = $true
+        $normalized += $canonical
+    }
+    if ($ExistingPeers.Count -gt 0 -and (($normalized -join ',') -cne ((@($ExistingPeers | ForEach-Object { $_.Name })) -join ','))) {
+        throw 'Requested peers differ from the persistent VPS14 inventory; normal reruns cannot rename or replace identities'
+    }
+    return $normalized
 }
 
 function Get-RemoteAdminEndpoint {
@@ -879,7 +928,7 @@ function Update-AdminClientEndpoint {
 }
 
 function Test-DC02AdminState {
-    param([string]$Endpoint)
+    param([string]$Endpoint, [array]$Peers)
     $ready = $true
     $underlay = Get-DC02UnderlayInterface
     foreach ($store in @('ActiveStore', 'PersistentStore')) {
@@ -889,22 +938,14 @@ function Test-DC02AdminState {
             $ready = $false
         }
     }
-    $rules = @(Get-EnabledRdpFirewallRules)
-    if ($rules.Count -eq 0) {
-        Write-Result 'MISSING' 'dc02-rdp-firewall' 'no enabled inbound RDP allow rule found'
+    if (-not (Test-DC02RdpFirewall)) {
+        Write-Result 'MISSING' 'dc02-rdp-firewall' 'managed RDP block/allow policy is absent or ineffective'
         $ready = $false
-    }
-    foreach ($rule in $rules) {
-        $filter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
-        $remoteAddresses = @($filter.RemoteAddress)
-        if ($remoteAddresses.Count -ne 1 -or $remoteAddresses[0] -ne '10.99.0.0/24') {
-            Write-Result 'MISSING' 'dc02-rdp-firewall' "RDP rule $($rule.Name) is not restricted to the VPN"
-            $ready = $false
-        }
     }
     $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
     $clientKeys = @()
-    foreach ($peer in @(@{ Name = 'jarvis'; Address = '10.99.0.2/32' }, @{ Name = 'giorgio-laptop'; Address = '10.99.0.3/32' })) {
+    if ($Peers.Count -eq 0) { Write-Result 'MISSING' 'admin-client' 'peer inventory is empty'; $ready = $false }
+    foreach ($peer in $Peers) {
         $path = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $peer.Name)
         if (-not (Test-AdminClientConfig -Path $path -Address $peer.Address -Endpoint $Endpoint)) {
             Write-Result 'MISSING' 'admin-client' "$($peer.Name) profile is missing or invalid at $path"
@@ -914,8 +955,8 @@ function Test-DC02AdminState {
             $clientKeys += [regex]::Match($content, '(?m)^PrivateKey = (\S+)').Groups[1].Value
         }
     }
-    if ($clientKeys.Count -eq 2 -and $clientKeys[0] -eq $clientKeys[1]) {
-        Write-Result 'MISSING' 'admin-client' 'Jarvis and laptop profiles share a private key'
+    if (@($clientKeys | Select-Object -Unique).Count -ne $clientKeys.Count) {
+        Write-Result 'MISSING' 'admin-client' 'VPN profiles share a private key'
         $ready = $false
     }
     if ($ready) { Write-Result 'PASS' 'dc02-admin-state' 'route, RDP scope and distinct client profiles match CP3' }
@@ -936,6 +977,9 @@ if ($Apply) { $selectedModes++ }
 if ($PrepareBootstrap) { $selectedModes++ }
 if ($selectedModes -ne 1) {
     throw 'Choose exactly one mode: -Check, -Apply or -PrepareBootstrap'
+}
+if ($PeerNames.Count -gt 0 -and (-not $Apply -or $Checkpoint -ne '3')) {
+    throw '-PeerNames is valid only with -Apply -Checkpoint 3'
 }
 
 $bootstrapSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'linux\bootstrap.sh'
@@ -1049,8 +1093,9 @@ if ($Check) {
     if ($remoteCheck.ExitCode -eq 0 -and -not $remoteCheck.HasRemediation) {
         Write-Result 'PASS' 'powerseven-bootstrap' "--check --checkpoint $Checkpoint completed"
         if ($Checkpoint -eq '3') {
+            $adminPeers = @(Get-RemoteAdminPeers -Target $target -SshOptions $keyOnlySshOptions)
             $endpoint = Get-RemoteAdminEndpoint -Target $target -SshOptions $keyOnlySshOptions
-            if (-not (Test-DC02AdminState -Endpoint $endpoint)) { exit 10 }
+            if (-not (Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers)) { exit 10 }
         }
         exit 0
     }
@@ -1175,7 +1220,6 @@ Write-Result 'PASS' 'ssh-key-auth' 'key-only authentication succeeded'
 $temporaryFiles = $null
 $remoteStageDir = $null
 $localRouteState = $null
-$localFirewallState = $null
 $remoteClientStaged = $false
 try {
     $bootstrapProbe = Test-ExistingBootstrapInstallation -SshPath $script:Ssh -KeyPath $keyPath -Target $target -RequiredVersion $requiredBootstrapVersion -RequiredCapabilities $requiredBootstrapCapabilities -HostKeyAlias $targetHostKeyAlias -RequiredCheckpoint $Checkpoint
@@ -1267,7 +1311,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 12\ncheckpoints=1,2,3')"
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 13\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1404,21 +1448,26 @@ sudo rm -rf "$backup" "$stage"
         }
     } elseif ($Checkpoint -eq '3' -and $Apply) {
         $clientDirectory = Join-Path $env:ProgramData 'PowerSeven\clients'
-        $adminPeers = @(
-            @{ Name = 'jarvis'; Address = '10.99.0.2/32' },
-            @{ Name = 'giorgio-laptop'; Address = '10.99.0.3/32' }
-        )
-        $peerStatusResult = Invoke-NativeCapture $script:Ssh ($keyOnlySshOptions + @($target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--peer-status'))
-        if ($peerStatusResult.ExitCode -ne 0) { throw 'remote admin VPN peer-state probe failed' }
-        $peerStatusText = $peerStatusResult.StandardOutput.Replace("`r", '').Trim()
-        $expectedPeerStatus = "jarvis=(absent|staged|exported)`ngiorgio-laptop=(absent|staged|exported)"
-        if ($peerStatusText -notmatch ("\A{0}\z" -f $expectedPeerStatus)) {
-            throw 'remote admin VPN peer-state protocol is invalid'
+        $existingPeers = @(Get-RemoteAdminPeers -Target $target -SshOptions $keyOnlySshOptions)
+        $chosenNames = @(Resolve-AdminPeerNames -ExistingPeers $existingPeers -RequestedNames $PeerNames)
+        if ($existingPeers.Count -eq 0) {
+            foreach ($name in $chosenNames) {
+                $existingPath = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $name)
+                if (Test-Path -LiteralPath $existingPath) {
+                    throw "Local profile already exists for $name without a VPS14 identity; explicit recovery or rotation is required"
+                }
+            }
         }
-        $peerStatuses = @{}
-        foreach ($line in ($peerStatusText -split "`n")) {
-            $parts = $line.Trim() -split '=', 2
-            $peerStatuses[$parts[0]] = $parts[1]
+        $applyArguments = if ($existingPeers.Count -eq 0) {
+            @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--peer-list' -ExtraValue ($chosenNames -join ','))
+        } else {
+            @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3')
+        }
+        Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($applyArguments -join ' '))
+        Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)
+        $adminPeers = @(Get-RemoteAdminPeers -Target $target -SshOptions $keyOnlySshOptions)
+        if ((@($adminPeers | ForEach-Object { $_.Name }) -join ',') -cne ($chosenNames -join ',')) {
+            throw 'VPS14 peer inventory differs from the selected names after apply'
         }
         foreach ($peer in $adminPeers) {
             $peer.Path = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $peer.Name)
@@ -1429,8 +1478,8 @@ sudo rm -rf "$backup" "$stage"
                     throw "existing $($peer.Name) config is invalid; explicit rotation is required"
                 }
             }
-            $peer.RemoteExists = $peerStatuses[$peer.Name] -ne 'absent'
-            $peer.Staged = $peerStatuses[$peer.Name] -eq 'staged'
+            $peer.RemoteExists = $peer.Status -ne 'absent'
+            $peer.Staged = $peer.Status -eq 'staged'
             if ($peer.LocalExists -and -not $peer.RemoteExists) {
                 throw "$($peer.Name) local config exists but remote public identity is missing; explicit rotation is required"
             }
@@ -1438,9 +1487,6 @@ sudo rm -rf "$backup" "$stage"
                 throw "$($peer.Name) private config is lost; explicit rotation is required"
             }
         }
-        $applyArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3')
-        Write-Result 'INFO' 'checkpoint' ("remote command={0}" -f ($applyArguments -join ' '))
-        Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $applyArguments)
         foreach ($peer in $adminPeers) {
             if (-not $peer.LocalExists) {
                 $temporaryClientPath = Join-Path $clientDirectory ('.powerseven-admin-' + $peer.Name + '.' + [guid]::NewGuid().ToString('N'))
@@ -1471,7 +1517,7 @@ sudo rm -rf "$backup" "$stage"
             $content = Get-Content -LiteralPath $_.Path -Raw
             [regex]::Match($content, '(?m)^PrivateKey = (\S+)').Groups[1].Value
         })
-        if ($privateKeys[0] -eq $privateKeys[1]) { throw 'admin VPN peers share a private key; explicit rotation is required' }
+        if (@($privateKeys | Select-Object -Unique).Count -ne $privateKeys.Count) { throw 'admin VPN peers share a private key; explicit rotation is required' }
         foreach ($peer in $adminPeers) {
             $cleanupArguments = @(New-RemoteCheckpointArguments -Action '--apply' -Checkpoint '3' -ExtraOption '--cleanup-client' -ExtraValue $peer.Name)
             Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target) + $cleanupArguments)
@@ -1479,8 +1525,8 @@ sudo rm -rf "$backup" "$stage"
         $rdpPath = New-LocalRdpFile -Directory $clientDirectory
         Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
         $localRouteState = Ensure-DC02AdminRoute
-        $localFirewallState = Ensure-DC02RdpFirewall
-        if (-not (Test-DC02AdminState -Endpoint $endpoint)) { throw 'DC02 administrative VPN state failed final validation' }
+        Ensure-DC02RdpFirewall
+        if (-not (Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers)) { throw 'DC02 administrative VPN state failed final validation' }
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'
     } else {
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
@@ -1491,7 +1537,7 @@ sudo rm -rf "$backup" "$stage"
 }
 catch {
     # Unexported staged client secrets remain for a safe retry; never rotate silently.
-    Restore-DC02RdpFirewall -FirewallState $localFirewallState
+    # Keep any managed RDP block in place on failure; a rerun completes the allow rule.
     Remove-DC02AdminRoute -RouteState $localRouteState
     throw
 }

@@ -86,13 +86,16 @@ VMnet8 statico `.14` e Bridged DHCP senza default route/DNS. Il passaggio `.145`
 → `.14` usa una sessione SSH con timeout bounded, attende il nuovo endpoint e
 riusa la host identity della sessione DHCP tramite `HostKeyAlias`; il token di
 rete viene confermato automaticamente. Il rollback guard resta attivo fino a
-quella conferma. Nel contract v12 la conferma attende fino a 45 s che DHCP Bridged,
+quella conferma. Nel contract v13 la conferma attende fino a 45 s che DHCP Bridged,
 networkd, route, DNS e Netplan persistente siano pronti; il runner concede
 75 s alla chiamata di conferma.
-CP3 configura `wg-admin` su VPS14, aggiunge su DC02 la route persistente
-`10.99.0.0/24 via 192.168.214.14`, limita RDP alla subnet VPN e salva il client
-config per `jarvis` (`10.99.0.2/32`) e `giorgio-laptop` (`10.99.0.3/32`)
-in `C:\ProgramData\PowerSeven\clients\`. Le chiavi sono indipendenti;
+CP3 configura `wg-admin` su VPS14. Su una nuova installazione chiede numero e
+nomi dei dispositivi, oppure accetta `-PeerNames desktop,portatile,surface`
+senza prompt. VPS14 conserva l'inventario e assegna gli IP da `10.99.0.2/32`;
+un rerun non richiede la lista. Il runner aggiunge su DC02 la route persistente
+`10.99.0.0/24 via 192.168.214.14`, installa un blocco RDP fuori VPN prima
+dell'allow VPN e salva ogni profilo in
+`C:\ProgramData\PowerSeven\clients\`. Le chiavi sono indipendenti;
 `AllowedIPs` include solo `192.168.214.0/24`, non Internet. La generazione
 resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
 importa solo il proprio client WireGuard. Codex usa la VPN del computer corrente.
@@ -101,8 +104,8 @@ La Bridged usa DHCP normale. A ogni Apply CP3 il runner legge l'IP corrente di
 VPS14 e aggiorna `Endpoint` nei profili locali senza cambiare le private key;
 se il lease cambia dopo l'import sui client, ridistribuire i profili aggiornati.
 Il runner configura prima la VPN ed esporta i profili,
-poi aggiunge la route e limita RDP su DC02. `-Check -Checkpoint 3` controlla
-anche route attiva/persistente, regole RDP e due profili distinti.
+poi aggiunge la route e le due regole RDP gestite su DC02. `-Check -Checkpoint
+3` controlla anche route attiva/persistente, regole RDP e profili distinti.
 
 ## Dichiarazioni e secret
 

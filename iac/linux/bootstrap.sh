@@ -7,7 +7,9 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
-readonly POWERSEVEN_BOOTSTRAP_VERSION='12'
+PEER_NAMES_CSV=''
+declare -a ADMIN_PEERS=()
+readonly POWERSEVEN_BOOTSTRAP_VERSION='13'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -17,13 +19,13 @@ readonly UNDERLAY_GATEWAY='192.168.214.2'
 readonly UNDERLAY_DNS='192.168.214.13'
 readonly ADMIN_NETWORK='10.99.0.0/24'
 readonly ADMIN_SERVER_ADDRESS='10.99.0.1/24'
-readonly -a ADMIN_PEERS=('jarvis:10.99.0.2/32' 'giorgio-laptop:10.99.0.3/32')
 readonly WG_INTERFACE='wg-admin'
 readonly WG_PORT='51820'
 readonly WG_CONFIG='/etc/wireguard/wg-admin.conf'
 readonly WG_SERVER_KEY='/etc/wireguard/powerseven-wg-admin-server.key'
 readonly WG_SERVER_PUB='/etc/wireguard/powerseven-wg-admin-server.pub'
 readonly WG_CLIENT_STATE_DIR='/var/lib/powerseven/admin-vpn/clients'
+readonly WG_PEER_INVENTORY='/var/lib/powerseven/admin-vpn/peers'
 readonly NETWORK_STATE_DIR='/var/lib/powerseven/network'
 readonly NETWORK_PENDING_DIR='/run/powerseven'
 readonly NETWORK_LOCK_FILE='/run/powerseven/network.lock'
@@ -34,7 +36,7 @@ readonly NETWORKD_TAKEOVER_TIMEOUT_SECONDS=6
 
 usage() {
     cat <<'EOF'
-Usage: bootstrap.sh --check|--apply [--checkpoint N]
+Usage: bootstrap.sh --check|--apply [--checkpoint N] [--peer-list name1,name2]
 
 Metadata:
   --version       print the bootstrap contract version
@@ -44,7 +46,7 @@ Metadata:
 Implemented checkpoints:
   1  detect and expand the mounted root LVM using VG space already available
   2  configure the two-NIC local network with a rollback guard
-  3  configure the WireGuard administrative VPN and two client peers
+  3  configure the WireGuard administrative VPN and chosen client peers
 
 Future checkpoints are intentionally not implemented yet.
 EOF
@@ -62,22 +64,6 @@ if [[ "$#" -eq 1 && "$1" == '--protocol' ]]; then
     printf 'powerseven-bootstrap %s\ncheckpoints=%s\n' "$POWERSEVEN_BOOTSTRAP_VERSION" "$POWERSEVEN_BOOTSTRAP_CAPABILITIES"
     exit 0
 fi
-if [[ "$#" -eq 1 && "$1" == '--peer-status' ]]; then
-    [[ "$EUID" -eq 0 ]] || { printf '%s\n' 'peer status requires root' >&2; exit 2; }
-    for peer in "${ADMIN_PEERS[@]}"; do
-        peer_name=${peer%%:*}
-        peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
-        peer_export="/tmp/powerseven-admin-$peer_name.conf"
-        if [[ -s "$peer_state" && -s "$peer_export" ]]; then status=staged
-        elif [[ -s "$peer_state" ]]; then status=exported
-        elif [[ -e "$peer_export" ]]; then status=invalid
-        else status=absent
-        fi
-        printf '%s=%s\n' "$peer_name" "$status"
-    done
-    exit 0
-fi
-
 report() {
     printf '%s: %s: %s\n' "$1" "$2" "$3"
 }
@@ -1106,6 +1092,100 @@ ensure_wireguard_server_keys() {
     [[ -s "$WG_SERVER_KEY" && -s "$WG_SERVER_PUB" ]] || return 1
 }
 
+admin_peer_names_to_addresses() {
+    local name index=2
+    local -A seen=()
+    ADMIN_PEERS=()
+    (( $# >= 1 && $# <= 253 )) || { report FAIL admin-vpn-peers 'choose 1 to 253 peers'; return 1; }
+    for name in "$@"; do
+        [[ "$name" =~ ^[a-z][a-z0-9_-]{0,31}$ && -z "${seen[$name]:-}" ]] || {
+            report FAIL admin-vpn-peers "invalid or duplicate peer name: $name"; return 1;
+        }
+        seen[$name]=1
+        ADMIN_PEERS+=("$name:10.99.0.$index/32")
+        (( index++ ))
+    done
+}
+
+load_admin_peers() {
+    local mode="$1" name public address octet offset pair file temporary_inventory inventory_dir
+    local -a names=() requested=() state_files=() config_pairs=() ordered_names=()
+    local -A address_by_key=() used_keys=()
+    if [[ -n "$PEER_NAMES_CSV" ]]; then
+        [[ "$PEER_NAMES_CSV" =~ ^[a-z][a-z0-9_-]{0,31}(,[a-z][a-z0-9_-]{0,31})*$ ]] || {
+            report FAIL admin-vpn-peers 'peer list must contain distinct lowercase names separated by commas'; return 1;
+        }
+        IFS=',' read -r -a requested <<< "$PEER_NAMES_CSV"
+        admin_peer_names_to_addresses "${requested[@]}" || return 1
+    fi
+    if [[ -e "$WG_PEER_INVENTORY" ]]; then
+        [[ -f "$WG_PEER_INVENTORY" ]] || { report FAIL admin-vpn-peers 'peer inventory is not a regular file'; return 1; }
+        mapfile -t names < "$WG_PEER_INVENTORY"
+    else
+        if [[ -d "$WG_CLIENT_STATE_DIR" ]]; then
+            while IFS= read -r -d '' file; do state_files+=("$file"); done < <(find "$WG_CLIENT_STATE_DIR" -maxdepth 1 -type f -name '*.pub' -print0)
+        fi
+        if (( ${#state_files[@]} > 0 )); then
+            [[ -f "$WG_CONFIG" ]] || {
+                report FAIL admin-vpn-peers 'legacy peer state has no WireGuard configuration'; return 1;
+            }
+            mapfile -t config_pairs < <(awk '
+                /^\[Peer\]$/ { if (peer) print key "|" address; peer=1; key=""; address=""; next }
+                peer && /^PublicKey = / { key=$3 }
+                peer && /^AllowedIPs = / { address=$3 }
+                END { if (peer) print key "|" address }
+            ' "$WG_CONFIG")
+            (( ${#config_pairs[@]} == ${#state_files[@]} )) || {
+                report FAIL admin-vpn-peers 'legacy public keys and WireGuard peer entries differ'; return 1;
+            }
+            for pair in "${config_pairs[@]}"; do
+                IFS='|' read -r public address <<< "$pair"
+                [[ "$public" =~ ^[A-Za-z0-9+/]{40,}={0,2}$ && "$address" =~ ^10\.99\.0\.([0-9]{1,3})/32$ && -z "${address_by_key[$public]:-}" ]] || {
+                    report FAIL admin-vpn-peers 'legacy WireGuard peer entry is invalid or duplicated'; return 1;
+                }
+                address_by_key[$public]=$address
+            done
+            for file in "${state_files[@]}"; do
+                name=${file##*/}; name=${name%.pub}
+                public=$(tr -d '[:space:]' < "$file")
+                address=${address_by_key[$public]:-}
+                [[ -n "$address" && -z "${used_keys[$public]:-}" && "$address" =~ ^10\.99\.0\.([0-9]{1,3})/32$ ]] || {
+                    report FAIL admin-vpn-peers "cannot match legacy identity for $name"; return 1;
+                }
+                used_keys[$public]=1
+                octet=${BASH_REMATCH[1]}
+                (( octet >= 2 && octet <= 254 )) || { report FAIL admin-vpn-peers 'legacy peer address is outside the admin pool'; return 1; }
+                offset=$((octet - 2))
+                [[ -z "${ordered_names[$offset]:-}" ]] || { report FAIL admin-vpn-peers 'legacy peer addresses are duplicated'; return 1; }
+                ordered_names[$offset]=$name
+            done
+            for (( offset=0; offset<${#state_files[@]}; offset++ )); do
+                [[ -n "${ordered_names[$offset]:-}" ]] || { report FAIL admin-vpn-peers 'legacy peer addresses are not contiguous from 10.99.0.2'; return 1; }
+                names+=("${ordered_names[$offset]}")
+            done
+        elif [[ -f "$WG_CONFIG" ]] && grep -q '^\[Peer\]$' "$WG_CONFIG"; then
+            report FAIL admin-vpn-peers 'WireGuard peers exist without public identity files'; return 1
+        elif (( ${#requested[@]} > 0 )); then
+            names=("${requested[@]}")
+        fi
+    fi
+    if (( ${#names[@]} == 0 )); then ADMIN_PEERS=(); return 0; fi
+    admin_peer_names_to_addresses "${names[@]}" || return 1
+    if (( ${#requested[@]} > 0 )); then
+        [[ "$(IFS=,; printf '%s' "${requested[*]}")" == "$(IFS=,; printf '%s' "${names[*]}")" ]] || {
+            report FAIL admin-vpn-peers 'requested peers differ from the persistent inventory'; return 1;
+        }
+    fi
+    if [[ "$mode" == 'write' && ! -e "$WG_PEER_INVENTORY" ]]; then
+        inventory_dir=${WG_PEER_INVENTORY%/*}
+        install -d -m 0700 "$inventory_dir"
+        temporary_inventory=$(mktemp "$inventory_dir/.peers.XXXXXX")
+        printf '%s\n' "${names[@]}" > "$temporary_inventory"
+        chmod 600 "$temporary_inventory"
+        mv -f "$temporary_inventory" "$WG_PEER_INVENTORY"
+    fi
+}
+
 admin_peer_address() {
     local peer
     for peer in "${ADMIN_PEERS[@]}"; do
@@ -1115,11 +1195,9 @@ admin_peer_address() {
 }
 
 ensure_wireguard_config() (
-    local server_private_key client_public_key previous_public='' peer peer_name peer_address peer_state temporary_config
+    local server_private_key client_public_key peer peer_name peer_address peer_state temporary_config
+    local -A seen_public=()
     trap 'rm -f "${temporary_config:-}"' EXIT
-    [[ ! -e "$WG_CLIENT_STATE_DIR/powerseven-admin-laptop.pub" ]] || {
-        report FAIL admin-vpn-client 'legacy single-peer identity needs explicit rotation; refusing duplicate address'; return 1;
-    }
     server_private_key=$(cat "$WG_SERVER_KEY")
     install -d -m 0700 /etc/wireguard
     temporary_config=$(mktemp /etc/wireguard/.wg-admin.XXXXXX)
@@ -1133,17 +1211,17 @@ EOF
     for peer in "${ADMIN_PEERS[@]}"; do
         peer_name=${peer%%:*}; peer_address=${peer#*:}
         peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
-        [[ -f "$peer_state" ]] || continue
+        [[ -s "$peer_state" ]] || { report FAIL admin-vpn-client "$peer_name public identity is missing"; return 1; }
         client_public_key=$(tr -d '[:space:]' < "$peer_state")
         if [[ ! "$client_public_key" =~ ^[A-Za-z0-9+/]{40,}={0,2}$ ]]; then
             report FAIL admin-vpn-client 'stored client public key is invalid'
             return 1
         fi
-        if [[ "$client_public_key" == "$previous_public" ]]; then
-            report FAIL admin-vpn-client 'two peers share a public key; explicit rotation is required'
+        if [[ -n "${seen_public[$client_public_key]:-}" ]]; then
+            report FAIL admin-vpn-client 'peer public keys are duplicated; explicit rotation is required'
             return 1
         fi
-        previous_public=$client_public_key
+        seen_public[$client_public_key]=1
         cat >> "$temporary_config" <<EOF
 
 [Peer]
@@ -1285,6 +1363,10 @@ ensure_admin_client_export() (
         report PASS admin-vpn-client "$peer_name identity preserved; staged export=$([[ -f "$peer_export" ]] && printf yes || printf no)"
         return 0
     fi
+    if [[ -f "$WG_CONFIG" ]] && grep -Fq "AllowedIPs = $peer_address" "$WG_CONFIG"; then
+        report FAIL admin-vpn-client "$peer_name public identity is lost; explicit rotation is required"
+        return 1
+    fi
 
     export_user=${SUDO_USER:-}
     [[ -n "$export_user" ]] || { report FAIL admin-vpn-client 'SUDO_USER is unavailable; refusing to create a user-owned client export'; return 1; }
@@ -1344,17 +1426,34 @@ if [[ "$#" -eq 1 && "$1" == '--admin-endpoint' ]]; then
     printf '%s:%s\n' "${BRIDGED_ADDRESS%/*}" "$WG_PORT"
     exit 0
 fi
+if [[ "$#" -eq 1 && "$1" == '--peer-status' ]]; then
+    [[ "$EUID" -eq 0 ]] || { printf '%s\n' 'peer status requires root' >&2; exit 2; }
+    load_admin_peers read || exit 1
+    for peer in "${ADMIN_PEERS[@]}"; do
+        peer_name=${peer%%:*}; peer_address=${peer#*:}
+        peer_state="$WG_CLIENT_STATE_DIR/$peer_name.pub"
+        peer_export="/tmp/powerseven-admin-$peer_name.conf"
+        if [[ -s "$peer_state" && -s "$peer_export" ]]; then status=staged
+        elif [[ -s "$peer_state" ]]; then status=exported
+        elif [[ -e "$peer_export" ]]; then status=invalid
+        else status=absent
+        fi
+        printf '%s|%s|%s\n' "$peer_name" "$peer_address" "$status"
+    done
+    exit 0
+fi
 
 vpn_checkpoint() {
     local peer peer_name peer_address peer_public
     if [[ -n "$CLEANUP_CLIENT" ]]; then
+        load_admin_peers read || return 1
         cleanup_admin_client_export
         return
     fi
     if [[ "$MODE" == 'apply' ]]; then
         ensure_vpn_packages || return 1
     fi
-    if ! require_commands ip wg wg-quick systemctl sysctl nft install mktemp awk grep cat tr; then
+    if ! require_commands ip wg wg-quick systemctl sysctl nft install mktemp awk grep cat tr find; then
         return 1
     fi
     if ! detect_network_interfaces; then
@@ -1366,6 +1465,10 @@ vpn_checkpoint() {
         return 1
     fi
     if [[ "$MODE" == 'check' ]]; then
+        load_admin_peers read || return 1
+        if (( ${#ADMIN_PEERS[@]} == 0 )) || [[ ! -f "$WG_PEER_INVENTORY" ]]; then
+            report MISSING admin-vpn-peers 'persistent peer inventory is not installed'
+        fi
         if [[ -s "$WG_SERVER_KEY" && -s "$WG_SERVER_PUB" && -f "$WG_CONFIG" ]]; then
             report PASS admin-vpn-server 'persistent server key and configuration exist'
         else
@@ -1405,6 +1508,8 @@ vpn_checkpoint() {
         return 0
     fi
     ensure_admin_firewall
+    load_admin_peers write
+    (( ${#ADMIN_PEERS[@]} > 0 )) || { report FAIL admin-vpn-peers 'first CP3 apply requires a peer list'; return 1; }
     ensure_wireguard_server_keys
     for peer in "${ADMIN_PEERS[@]}"; do
         ensure_admin_client_export "${peer%%:*}"
@@ -1412,11 +1517,7 @@ vpn_checkpoint() {
     ensure_wireguard_config
     ensure_admin_forwarding
     systemctl enable --now "wg-quick@$WG_INTERFACE.service"
-    for peer in "${ADMIN_PEERS[@]}"; do
-        peer_name=${peer%%:*}; peer_address=${peer#*:}
-        peer_public=$(tr -d '[:space:]' < "$WG_CLIENT_STATE_DIR/$peer_name.pub")
-        wg set "$WG_INTERFACE" peer "$peer_public" allowed-ips "$peer_address"
-    done
+    wg syncconf "$WG_INTERFACE" <(wg-quick strip "$WG_CONFIG")
     admin_firewall_is_ready || { report FAIL admin-vpn-firewall 'nftables policy disappeared during CP3 apply'; return 1; }
     report PASS admin-vpn "WireGuard $WG_INTERFACE configured at $ADMIN_SERVER_ADDRESS; bridged ingress is UDP/$WG_PORT only"
 }
@@ -1445,6 +1546,11 @@ while [[ $# -gt 0 ]]; do
             CLEANUP_CLIENT="$2"
             shift 2
             ;;
+        --peer-list)
+            [[ $# -ge 2 ]] || { report FAIL arguments '--peer-list requires names'; exit 2; }
+            PEER_NAMES_CSV="$2"
+            shift 2
+            ;;
         --help|-h) usage; exit 0 ;;
         *) report FAIL arguments "unknown argument: $1"; usage; exit 2 ;;
     esac
@@ -1463,23 +1569,26 @@ if [[ "$CHECKPOINT" != '1' && "$CHECKPOINT" != '2' && "$CHECKPOINT" != '3' ]]; t
     report FAIL "checkpoint$CHECKPOINT" 'only checkpoints 1, 2 and 3 are implemented'
     exit 2
 fi
-if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" ) ]]; then
+if [[ "$CHECKPOINT" == '1' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" || -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" ) ]]; then
     report FAIL arguments 'network/client options are valid only for checkpoints 2 or 3'
     exit 2
 fi
-if [[ "$CHECKPOINT" == '2' && -n "$CLEANUP_CLIENT" ]]; then
-    report FAIL arguments '--cleanup-client is valid only for checkpoint 3'
+if [[ "$CHECKPOINT" == '2' && ( -n "$CLEANUP_CLIENT" || -n "$PEER_NAMES_CSV" ) ]]; then
+    report FAIL arguments 'peer options are valid only for checkpoint 3'
     exit 2
 fi
 if [[ "$CHECKPOINT" == '3' && ( -n "$NETWORK_TRANSACTION_ID" || -n "$CONFIRM_NETWORK_TRANSACTION_ID" ) ]]; then
     report FAIL arguments 'network transaction options are valid only for checkpoint 2'
     exit 2
 fi
-if [[ -n "$CLEANUP_CLIENT" ]] && ! admin_peer_address "$CLEANUP_CLIENT" >/dev/null; then
-    report FAIL arguments 'unknown admin VPN peer'; exit 2
-fi
 if [[ -n "$CLEANUP_CLIENT" && "$MODE" != 'apply' ]]; then
     report FAIL arguments '--cleanup-client requires --apply'; exit 2
+fi
+if [[ -n "$PEER_NAMES_CSV" && ( "$MODE" != 'apply' || -n "$CLEANUP_CLIENT" ) ]]; then
+    report FAIL arguments '--peer-list requires CP3 apply without cleanup'; exit 2
+fi
+if [[ -n "$CLEANUP_CLIENT" && ! "$CLEANUP_CLIENT" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; then
+    report FAIL arguments 'invalid admin VPN peer name'; exit 2
 fi
 if [[ -n "$NETWORK_TRANSACTION_ID" && ! "$NETWORK_TRANSACTION_ID" =~ ^[a-f0-9]{32}$ ]] ||
    [[ -n "$CONFIRM_NETWORK_TRANSACTION_ID" && ! "$CONFIRM_NETWORK_TRANSACTION_ID" =~ ^[a-f0-9]{32}$ ]]; then

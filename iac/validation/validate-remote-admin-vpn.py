@@ -7,6 +7,7 @@ import ipaddress
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -104,6 +105,60 @@ if rollback_underlay_configured; then printf 'ready\\n'; else printf 'pending\\n
     return True
 
 
+def admin_peer_inventory_fixtures(bootstrap: str) -> bool:
+    functions = []
+    for name in ("admin_peer_names_to_addresses", "load_admin_peers"):
+        match = re.search(rf"^{name}\(\) \{{.*?^\}}", bootstrap, re.MULTILINE | re.DOTALL)
+        if not match:
+            return False
+        functions.append(match.group())
+    prefix = """set -euo pipefail
+ADMIN_PEERS=()
+WG_CLIENT_STATE_DIR="$FIX/clients"
+WG_PEER_INVENTORY="$FIX/peers"
+WG_CONFIG="$FIX/wg-admin.conf"
+report() { printf '%s\\n' "$*"; }
+""" + "\n".join(functions) + "\n"
+
+    def run(root: Path, body: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", "-c", prefix + body], env={**os.environ, "FIX": str(root)},
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        fresh = run(root, 'PEER_NAMES_CSV="desktop,portatile,surface"\nload_admin_peers write\nprintf "%s\\n" "${ADMIN_PEERS[*]}"\n')
+        expected = "desktop:10.99.0.2/32 portatile:10.99.0.3/32 surface:10.99.0.4/32"
+        if fresh.returncode or fresh.stdout.strip() != expected or (root / "peers").read_text().splitlines() != ["desktop", "portatile", "surface"]:
+            return False
+        rerun = run(root, 'PEER_NAMES_CSV=""\nload_admin_peers read\nprintf "%s\\n" "${ADMIN_PEERS[*]}"\n')
+        changed = run(root, 'PEER_NAMES_CSV="desktop,other"\nload_admin_peers write\n')
+        if rerun.returncode or rerun.stdout.strip() != expected or changed.returncode == 0 or (root / "peers").read_text().splitlines() != ["desktop", "portatile", "surface"]:
+            return False
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clients = root / "clients"
+        clients.mkdir()
+        keys = {"jarvis": "A" * 43 + "=", "giorgio-laptop": "B" * 43 + "="}
+        for name, key in keys.items():
+            (clients / f"{name}.pub").write_text(key + "\n")
+        (root / "wg-admin.conf").write_text(
+            "[Interface]\nAddress = 10.99.0.1/24\n\n"
+            f"[Peer]\nPublicKey = {keys['giorgio-laptop']}\nAllowedIPs = 10.99.0.3/32\n\n"
+            f"[Peer]\nPublicKey = {keys['jarvis']}\nAllowedIPs = 10.99.0.2/32\n"
+        )
+        read = run(root, 'PEER_NAMES_CSV=""\nload_admin_peers read\nprintf "%s\\n" "${ADMIN_PEERS[*]}"\n')
+        migrated = run(root, 'PEER_NAMES_CSV=""\nload_admin_peers write\nprintf "%s\\n" "${ADMIN_PEERS[*]}"\n')
+        if (read.returncode or migrated.returncode or read.stdout != migrated.stdout or
+                read.stdout.strip() != "jarvis:10.99.0.2/32 giorgio-laptop:10.99.0.3/32" or
+                (root / "peers").read_text().splitlines() != ["jarvis", "giorgio-laptop"] or
+                any((clients / f"{name}.pub").read_text().strip() != key for name, key in keys.items())):
+            return False
+    return True
+
+
 def host_key_fixture(trusted: str, presented: str) -> bool:
     return trusted == presented
 
@@ -132,8 +187,8 @@ def cold_state_fixture(persistent_ready: bool) -> bool:
     return persistent_ready
 
 
-def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, endpoint_sessions: int) -> int:
-    return protocol_probe_sessions + checkpoint_sessions + endpoint_sessions
+def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, extra_sessions: int) -> int:
+    return protocol_probe_sessions + checkpoint_sessions + extra_sessions
 
 
 def protocol_probe_fixture(exit_code: int, stderr: str, output: str, version: str, capabilities: str, checkpoint: str) -> tuple[bool, bool]:
@@ -176,10 +231,13 @@ def main() -> int:
     admin_plan = networks["target_local"]["address_planes"]["admin_vpn"]
     admin = networks["target_local"]["admin_vpn"]
     admin_net = ipaddress.ip_network(admin_plan["cidr"])
-    expected_peers = {"jarvis": "10.99.0.2/32", "giorgio-laptop": "10.99.0.3/32"}
-    declared_peers = {peer["name"]: peer["address"] for peer in admin["clients"]}
-    if str(admin_net) == "10.99.0.0/24" and admin_plan["server"] == "10.99.0.1/24" and admin_plan["clients"] == expected_peers and declared_peers == expected_peers:
-        report("PASS", "admin-vpn-addresses", "dedicated 10.99.0.0/24 plan is declared")
+    pool = admin_plan["client_pool"]
+    clients = admin["clients"]
+    if (str(admin_net) == "10.99.0.0/24" and admin_plan["server"] == "10.99.0.1/24" and
+            pool == {"first": "10.99.0.2", "last": "10.99.0.254", "assignment": "sequential_by_persistent_peer_order"} and
+            clients["source"] == "vps14_persistent_peer_inventory" and clients["selected_on_first_cp3_apply"] is True and
+            clients["address_start"] == pool["first"] and clients["address_end"] == pool["last"]):
+        report("PASS", "admin-vpn-addresses", "variable peer pool 10.99.0.2-254 is declared")
     else:
         report("FAIL", "admin-vpn-addresses", "admin VPN address plan is inconsistent")
     if admin["allowed_ips"] != ["192.168.214.0/24"] or admin["nat"]["default"] is not False:
@@ -192,7 +250,7 @@ def main() -> int:
     else:
         report("FAIL", "dc02-route", "DC02 return route is incomplete")
 
-    if all(token in bootstrap for token in ("network_checkpoint", "vpn_checkpoint", "--confirm-network", "wg-admin", "10.99.0.1/24", "jarvis:10.99.0.2/32", "giorgio-laptop:10.99.0.3/32")):
+    if all(token in bootstrap for token in ("network_checkpoint", "vpn_checkpoint", "--confirm-network", "wg-admin", "10.99.0.1/24", "WG_PEER_INVENTORY", "--peer-list")):
         report("PASS", "linux-bootstrap", "CP2/CP3 and rollback/client paths exist")
     else:
         report("FAIL", "linux-bootstrap", "CP2/CP3 implementation markers are incomplete")
@@ -345,14 +403,19 @@ def main() -> int:
             'iifname "$WG_INTERFACE" drop' in bootstrap and
             '"AllowedIPs = $UNDERLAY_NETWORK"' in bootstrap and
             "10.10.10.0/24" not in cp3_body and
-            "giorgio-laptop" in runner and "jarvis" in runner and
+            "jarvis" not in bootstrap and "giorgio-laptop" not in bootstrap and
+            "jarvis" not in runner and "giorgio-laptop" not in runner and
+            "load_admin_peers write" in cp3_body and
+            'wg syncconf "$WG_INTERFACE"' in cp3_body and
             "--peer-status" in bootstrap and "--peer-status" in runner and
+            "-PeerNames" in runner and "Read-Host 'Quanti dispositivi" in runner and
             "Invoke-NativeCapture $script:Ssh" in runner and
             "Test-NativeSuccess $script:Ssh ($keyOnlySshOptions + @($target, 'test'" not in runner and
-            "explicit rotation is required" in runner):
-        report("PASS", "two-peer-vpn-fixtures", "independent allowlisted peers, split tunnel and lost-key safety are declared")
+            "explicit rotation is required" in runner and
+            admin_peer_inventory_fixtures(bootstrap)):
+        report("PASS", "variable-peer-vpn-fixtures", "chosen peers persist, migrate from legacy state and keep split tunnel and keys")
     else:
-        report("FAIL", "two-peer-vpn-fixtures", "two-peer VPN state/export/split-tunnel guards are incomplete")
+        report("FAIL", "variable-peer-vpn-fixtures", "variable peer state, migration or split-tunnel guards are incomplete")
     cp3_apply = cp3_body.split("    if [[ \"$MODE\" == 'apply' ]]", 1)[-1]
     cp3_stages = [cp3_apply.rfind(token) for token in (
         "ensure_admin_firewall", "ensure_wireguard_server_keys", "ensure_admin_client_export",
@@ -370,7 +433,7 @@ def main() -> int:
         report("PASS", "cp3-firewall-order", "nft policy precedes VPN start, boot ordering is enforced and Check compares live rules")
     else:
         report("FAIL", "cp3-firewall-order", "CP3 firewall ordering, atomic replacement or live-rule check is incomplete")
-    if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "Set-NetFirewallAddressFilter" in runner:
+    if "10.99.0.0/24" in runner and "New-NetRoute" in runner and "New-NetFirewallRule" in runner:
         report("PASS", "windows-runner", "DC02 route, RDP firewall and client export paths exist")
     else:
         report("FAIL", "windows-runner", "DC02 integration is incomplete")
@@ -385,11 +448,23 @@ def main() -> int:
             "-RouteMetric 50 -ErrorAction Stop" in runner and
             "-PolicyStore $store" in runner and
             "function Test-DC02AdminState" in runner and
-            "Test-DC02AdminState -Endpoint $endpoint" in runner and
-            "Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow" in runner):
+            "Test-DC02AdminState -Endpoint $endpoint -Peers $adminPeers" in runner and
+            "Test-DC02RdpFirewall" in runner):
         report("PASS", "cp3-runner-order", "VPN and profiles precede DC02 changes; Check covers both route stores and RDP scope")
     else:
         report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
+    rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)", runner, re.DOTALL)
+    rdp_body = rdp_match.group("body") if rdp_match else ""
+    if (rdp_match and rdp_body.find("New-NetFirewallRule -Name $blockName") < rdp_body.find("New-NetFirewallRule -Name $allowName") and
+            "Get-NetFirewallProfile -PolicyStore ActiveStore" in rdp_body and
+            "0.0.0.0-10.98.255.255" in runner and "10.99.1.0-255.255.255.255" in runner and "::/0" in runner and
+            "Get-NetFirewallRule -Name $Name -PolicyStore $store" in runner and
+            "Get-EnabledRdpFirewallRules" not in runner and
+            "Remove-NetRoute -DestinationPrefix" in runner and
+            "Keep any managed RDP block in place on failure" in runner):
+        report("PASS", "cp3-rdp-policy", "managed block precedes allow; active policy and fail-closed rerun are checked")
+    else:
+        report("FAIL", "cp3-rdp-policy", "RDP policy may depend on existing rules or leave a broad allow active")
     scp_source = "Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))"
     if (scp_source in cp3_runner and
             "$remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name" in cp3_runner and
@@ -427,7 +502,7 @@ def main() -> int:
         report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
     else:
         report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
-    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--admin-endpoint", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
+    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--admin-endpoint", "--network-token", "--confirm-network", "--cleanup-client", "--peer-list", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
@@ -437,11 +512,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='12'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='13'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '12'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '13'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -461,17 +536,18 @@ def main() -> int:
             "Test-ExistingBootstrapInstallation" in check_flow and
             not re.search(r"\bTest-SshKeyAuthentication\b", check_flow) and
             check_flow.count("Invoke-NativeReadOnly") == 1 and
+            "Get-RemoteAdminPeers -Target $target" in check_flow and
             "Get-RemoteAdminEndpoint -Target $target" in check_flow and
             check_ssh_session_count(1, 1, 0) == 2 and
-            check_ssh_session_count(1, 1, 1) == 3):
-        report("PASS", "check-ssh-session-budget", "Check uses two SSH sessions; CP3 adds one read-only endpoint probe")
+            check_ssh_session_count(1, 1, 2) == 4):
+        report("PASS", "check-ssh-session-budget", "Check uses two SSH sessions; CP3 adds peer and endpoint probes")
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 12\ncheckpoints=1,2,3\n", "12", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "12", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "12", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "12", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 13\ncheckpoints=1,2,3\n", "13", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "13", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "13", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "13", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")

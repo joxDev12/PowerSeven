@@ -48,9 +48,10 @@ target_local:
       purpose: remote_administration_only
       hub: vps14
       server: 10.99.0.1/24
-      clients:
-        jarvis: 10.99.0.2/32
-        giorgio-laptop: 10.99.0.3/32
+      client_pool:
+        first: 10.99.0.2
+        last: 10.99.0.254
+        assignment: sequential_by_persistent_peer_order
       transport: WireGuard via bridged VPS14 NIC
   underlay:
     graph_id: net_local_vmware_underlay
@@ -92,12 +93,11 @@ target_local:
     hub: vps14
     address: 10.99.0.1/24
     clients:
-      - name: jarvis
-        address: 10.99.0.2/32
-        config: powerseven-admin-jarvis.conf
-      - name: giorgio-laptop
-        address: 10.99.0.3/32
-        config: powerseven-admin-giorgio-laptop.conf
+      source: vps14_persistent_peer_inventory
+      selected_on_first_cp3_apply: true
+      address_start: 10.99.0.2
+      address_end: 10.99.0.254
+      profile_pattern: powerseven-admin-{name}.conf
     endpoint: udp/51820 on VPS14 bridged NIC
     allowed_ips:
       - 192.168.214.0/24

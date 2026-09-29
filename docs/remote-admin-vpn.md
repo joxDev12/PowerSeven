@@ -5,7 +5,7 @@ Jarvis usa solo il proprio tunnel client.
 
 ## Topologia
 
-`jarvis 10.99.0.2/32` o `giorgio-laptop 10.99.0.3/32` -> `wg-admin 10.99.0.1/24` ->
+`client 10.99.0.2/32` e successivi -> `wg-admin 10.99.0.1/24` ->
 `192.168.214.0/24`. La VPN usa la NIC Bridged di VPS14 solo per UDP/51820;
 VMnet8 resta la rete di management con l'unica default route via
 `192.168.214.2` e DNS `192.168.214.13`.
@@ -19,7 +19,7 @@ configurazione normale. La route equivalente per VPS12 arriva più avanti.
 1. Confermare la configurazione VMware già validata in CP2: NIC 1 su VMnet8,
    NIC 2 Bridged sulla scheda fisica, “Connected” e “Connect at power on”.
 2. Non modificare MAC/order della NIC VMnet8. La Bridged usa DHCP normale:
-   il runner legge il suo IP corrente e aggiorna `Endpoint` nei due profili
+   il runner legge il suo IP corrente e aggiorna `Endpoint` nei profili
    durante ogni Apply CP3, senza rigenerare le chiavi. Se il lease cambia dopo
    che i profili sono stati importati, rieseguire Apply e ridistribuire i
    profili aggiornati ai rispettivi computer.
@@ -52,21 +52,36 @@ systemd anche ai reboot. `-Check -Checkpoint 3` verifica le regole nftables
 effettive, oltre alla configurazione persistente. Il runner completa VPN,
 export e pulizia dei profili prima di modificare route e filtro RDP su DC02.
 
-Il runner crea/verifica su DC02 la route verso `10.99.0.0/24`, limita le regole
-RDP inbound di DC02 alla subnet `10.99.0.0/24` e salva senza password:
+Al primo Apply su una nuova installazione il runner chiede quanti dispositivi
+creare e un nome per ciascuno. Per automazione accetta
+`-PeerNames desktop,portatile,surface` e non chiede input. Sono ammessi nomi
+univoci di 1-32 caratteri, iniziati da una lettera e composti da lettere,
+numeri, `_` o `-`; vengono salvati in minuscolo. VPS14 conserva i nomi in
+`/var/lib/powerseven/admin-vpn/peers` e assegna `.2`, `.3`, ... nell'ordine
+scelto. Nei normali rerun il runner legge l'inventario e non chiede nulla.
+
+Lo stato LIVE precedente viene migrato automaticamente: i file public key
+e `wg-admin.conf` associano `jarvis` a `.2` e `giorgio-laptop` a `.3`.
+I profili già esportati su DC02 vengono riutilizzati senza ruotare le chiavi.
+
+Il runner crea/verifica su DC02 la route verso `10.99.0.0/24`, installa prima
+una regola RDP che blocca TCP/3389 da fuori VPN e poi una regola allow da
+`10.99.0.0/24` verso `192.168.214.13`. Le regole esistenti non vengono
+modificate; il blocco esplicito prevale su eventuali allow più ampi.
+I profili vengono salvati senza password in:
 
 ```text
-C:\ProgramData\PowerSeven\clients\powerseven-admin-jarvis.conf
-C:\ProgramData\PowerSeven\clients\powerseven-admin-giorgio-laptop.conf
+C:\ProgramData\PowerSeven\clients\powerseven-admin-{nome}.conf
 C:\ProgramData\PowerSeven\clients\PowerSeven-DC02.rdp
 ```
 
 Le private key distinte non vengono stampate o versionate. VPS14 conserva solo
-le public key; dopo ogni SCP validato il runner elimina lo staging del peer.
+le public key dopo l'export; dopo ogni SCP validato il runner elimina lo
+staging del peer.
 Se un peer esiste ma il config locale è perso, il rerun fallisce senza
 rigenerare identità: serve una
 rotazione esplicita.
-Conservare i due file protetti su DC02 e copiare ciascuno solo sul proprio
+Conservare i profili protetti su DC02 e copiare ciascuno solo sul proprio
 computer. Un rerun riusa le identità; se si interrompe prima della pulizia,
 lo staging residuo permette di recuperare il profilo mancante.
 
@@ -74,19 +89,21 @@ lo staging residuo permette di recuperare il profilo mancante.
 
 1. Confermare che VPS14 resta raggiungibile su VMnet8 `.14` e che la Bridged
    ha un lease DHCP. Non è richiesta alcuna configurazione del router. CP2 è
-   già stato validato LIVE dopo reboot; il runner v12 migrerà il bootstrap
+   già stato validato LIVE dopo reboot; il runner v13 migrerà il bootstrap
    Linux durante l'Apply CP3.
 2. Su DC02, PowerShell Administrator: `setup-powerseven.ps1 -Apply -Checkpoint 3`
    con `-Vps14Address 192.168.214.14` e lo stesso `-UbuntuUsername` del CP2.
-   Dopo il precedente errore SCP, questo stesso comando recupera i due file
-   già staged e conserva le identità dei peer. Se fallisce, ispezionare
+   Il runner v13 ricostruisce l'inventario dai peer LIVE, riusa i due profili
+   locali e configura le nuove regole RDP. Non passare `-PeerNames` durante
+   questa migrazione. Se fallisce, ispezionare
    l'errore e rieseguire lo stesso Apply dopo la
    correzione; non cancellare profili, public key o staging per tentare il rerun.
 3. Eseguire `setup-powerseven.ps1 -Check -Checkpoint 3`. Su VPS14 verificare
    `systemctl is-active powerseven-admin-firewall wg-quick@wg-admin`,
    `nft list table inet powerseven_admin` e `wg show wg-admin`, senza esporre
    private key. Su DC02 confermare route attiva e persistente e che le regole
-   RDP inbound allow TCP/3389 accettino solo `10.99.0.0/24`.
+   RDP gestite blocchino le sorgenti fuori `10.99.0.0/24` e consentano
+   la VPN.
 4. Copiare il profilo `jarvis` su Jarvis e `giorgio-laptop` sul portatile in
    modo protetto. Importare ogni profilo sul computer corrispondente; i due
    computer hanno chiavi private distinte. Nessun profilo è destinato a Codex.
