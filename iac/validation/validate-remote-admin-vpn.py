@@ -273,6 +273,45 @@ def protocol_probe_fixture(exit_code: int, stderr: str, output: str, version: st
     return authenticated, supported
 
 
+def bootstrap_contract_fixture(bootstrap: str, runner: str) -> bool:
+    version_pattern = r"^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'\r?$"
+    capabilities_pattern = r"^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([0-9]+(?:,[0-9]+)*)'\r?$"
+    versions = re.findall(version_pattern, bootstrap, re.MULTILINE)
+    capabilities = re.findall(capabilities_pattern, bootstrap, re.MULTILINE)
+    windows_versions = re.findall(version_pattern, bootstrap.replace("\n", "\r\n"), re.MULTILINE)
+    windows_capabilities = re.findall(capabilities_pattern, bootstrap.replace("\n", "\r\n"), re.MULTILINE)
+    transaction_match = re.search(r"\$installCommand = @'\n(?P<body>.*?)\n'@", runner, re.DOTALL)
+    transaction = transaction_match.group("body") if transaction_match else ""
+    sentinel_version, sentinel_capabilities = "987", "4,5"
+    rendered = transaction.replace("__BOOTSTRAP_VERSION__", sentinel_version).replace("__BOOTSTRAP_CAPABILITIES__", sentinel_capabilities)
+    try:
+        shell_check = subprocess.run(["bash", "-n"], input=rendered, text=True, capture_output=True, check=False)
+    except OSError:
+        return False
+    return (
+        len(versions) == 1 and len(capabilities) == 1 and versions == windows_versions and capabilities == windows_capabilities and transaction_match is not None and
+        "if [[ \"$#\" -eq 1 && \"$1\" == '--protocol' ]]" in bootstrap and
+        'printf \'powerseven-bootstrap %s\\ncheckpoints=%s\\n\' "$POWERSEVEN_BOOTSTRAP_VERSION" "$POWERSEVEN_BOOTSTRAP_CAPABILITIES"' in bootstrap and
+        "$bootstrapVersionMatches = [regex]::Matches($bootstrapContractSource" in runner and
+        "$bootstrapCapabilitiesMatches = [regex]::Matches($bootstrapContractSource" in runner and
+        "New-RemoteBootstrapFiles -Username $UbuntuUsername -BootstrapContent $bootstrapContractSource" in runner and
+        "([0-9]+)'\\r?$" in runner and "([0-9]+(,[0-9]+)*)'\\r?$" in runner and
+        "$requiredBootstrapVersion = $bootstrapVersionMatches[0].Groups[1].Value" in runner and
+        "$bootstrapCapabilities = $bootstrapCapabilitiesMatches[0].Groups[1].Value" in runner and
+        "$requiredBootstrapCapabilities = \"checkpoints=$bootstrapCapabilities\"" in runner and
+        not re.search(r"\$requiredBootstrapVersion\s*=\s*['\"][0-9]+['\"]", runner) and
+        not re.search(r"\$requiredBootstrapCapabilities\s*=\s*['\"]checkpoints=[0-9]", runner) and
+        "expected_protocol=\"$(printf 'powerseven-bootstrap %s\\ncheckpoints=%s' '__BOOTSTRAP_VERSION__' '__BOOTSTRAP_CAPABILITIES__')\"" in transaction and
+        'test "$(sudo "$wrapper" --protocol)" = "$expected_protocol"' in transaction and
+        "$installCommand = $installCommand.Replace('__STAGE__'" in runner and
+        ".Replace('__BOOTSTRAP_VERSION__', $requiredBootstrapVersion)" in runner and
+        ".Replace('__BOOTSTRAP_CAPABILITIES__', $bootstrapCapabilities)" in runner and
+        not re.search(r"powerseven-bootstrap\s+[0-9]+", transaction) and
+        f"powerseven-bootstrap %s\\ncheckpoints=%s' '{sentinel_version}' '{sentinel_capabilities}'" in rendered and
+        shell_check.returncode == 0
+    )
+
+
 def transaction_isolation_fixture(old_transaction: str, new_transaction: str) -> bool:
     return old_transaction != new_transaction
 
@@ -615,11 +654,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='14'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
-        report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
+    if bootstrap_contract_fixture(bootstrap, runner):
+        report("PASS", "bootstrap-contract-sync", "runner derives expected protocol from bootstrap.sh and transaction probe follows future bumps")
     else:
-        report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '14'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+        report("FAIL", "bootstrap-contract-sync", "required protocol or transaction probe can diverge from bootstrap.sh")
+    if all(token in runner for token in ("Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap", "-RequiredVersion $requiredBootstrapVersion", "-RequiredCapabilities $requiredBootstrapCapabilities")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -646,11 +685,17 @@ def main() -> int:
         report("PASS", "check-ssh-session-budget", "Check uses two SSH sessions; CP3 adds peer and endpoint probes")
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
+    bootstrap_version = re.search(r"^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'\r?$", bootstrap, re.MULTILINE)
+    bootstrap_capabilities = re.search(r"^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([0-9]+(?:,[0-9]+)*)'\r?$", bootstrap, re.MULTILINE)
+    current_version = bootstrap_version.group(1) if bootstrap_version else "0"
+    previous_version = str(max(0, int(current_version) - 1))
+    current_capabilities = f"checkpoints={bootstrap_capabilities.group(1)}" if bootstrap_capabilities else "checkpoints="
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 13\ncheckpoints=1,2,3\n", "13", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "13", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "13", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "13", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", f"powerseven-bootstrap {current_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, True)),
+        (protocol_probe_fixture(0, "", f"powerseven-bootstrap {previous_version}\n{current_capabilities}\n", current_version, current_capabilities, "2"), (True, False)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", current_version, current_capabilities, "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", current_version, current_capabilities, "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", current_version, current_capabilities, "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")
@@ -662,7 +707,7 @@ def main() -> int:
         report("PASS", "auth-probe-reuse", "initial auth result is reused; enrollment performs exactly one post-install verification")
     else:
         report("FAIL", "auth-probe-reuse", "runner repeats authentication after a successful probe")
-    if all(token in runner for token in ("function Assert-LinuxPayloadLf", "function ConvertTo-LinuxLf", "$wrapper = ConvertTo-LinuxLf", "$bootstrapContent = ConvertTo-LinuxLf", "$installCommand = ConvertTo-LinuxLf", "powerseven-install-transaction.sh", "bash -n \"$0\"", "$transactionPath", "$remoteTransactionCommand")):
+    if all(token in runner for token in ("function Assert-LinuxPayloadLf", "function ConvertTo-LinuxLf", "$wrapper = ConvertTo-LinuxLf", "$bootstrapContent = ConvertTo-LinuxLf -Name 'bootstrap script' -Content $BootstrapContent", "$installCommand = ConvertTo-LinuxLf", "powerseven-install-transaction.sh", "bash -n \"$0\"", "$transactionPath", "$remoteTransactionCommand")):
         report("PASS", "linux-payload-eol", "runner stages, normalizes and validates Linux payloads as LF")
     else:
         report("FAIL", "linux-payload-eol", "Linux payload staging/EOL validation is incomplete")

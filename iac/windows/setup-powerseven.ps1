@@ -12,8 +12,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '14'
-$requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 $script:AdminClientAllowedIPs = '192.168.214.0/25, 192.168.214.128/25'
 $script:LegacyAdminClientAllowedIPs = '192.168.214.0/24'
 
@@ -643,7 +641,7 @@ function New-RemoteCheckpointArguments {
 function New-RemoteBootstrapFiles {
     param(
         [string]$Username,
-        [string]$BootstrapSource
+        [string]$BootstrapContent
     )
 
     $wrapper = @'
@@ -702,7 +700,7 @@ exec /usr/local/lib/powerseven/bootstrap.sh "$@"
     $sudoers = "{0} ALL=(root) NOPASSWD: /usr/local/sbin/powerseven-bootstrap`n" -f $Username
     $wrapper = ConvertTo-LinuxLf -Name 'bootstrap wrapper' -Content $wrapper
     $sudoers = ConvertTo-LinuxLf -Name 'bootstrap sudoers' -Content $sudoers
-    $bootstrapContent = ConvertTo-LinuxLf -Name 'bootstrap script' -Content ([System.IO.File]::ReadAllText($BootstrapSource))
+    $bootstrapContent = ConvertTo-LinuxLf -Name 'bootstrap script' -Content $BootstrapContent
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('powerseven-bootstrap-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 
@@ -1090,6 +1088,15 @@ $bootstrapSource = Join-Path (Split-Path -Parent $PSScriptRoot) 'linux\bootstrap
 if (-not (Test-Path -LiteralPath $bootstrapSource -PathType Leaf)) {
     throw "Linux bootstrap source is missing: $bootstrapSource"
 }
+$bootstrapContractSource = Get-Content -LiteralPath $bootstrapSource -Raw
+$bootstrapVersionMatches = [regex]::Matches($bootstrapContractSource, "(?m)^readonly POWERSEVEN_BOOTSTRAP_VERSION='([0-9]+)'\r?$")
+$bootstrapCapabilitiesMatches = [regex]::Matches($bootstrapContractSource, "(?m)^readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='([0-9]+(,[0-9]+)*)'\r?$")
+if ($bootstrapVersionMatches.Count -ne 1 -or $bootstrapCapabilitiesMatches.Count -ne 1) {
+    throw 'Linux bootstrap must declare exactly one numeric version and checkpoint capability list'
+}
+$requiredBootstrapVersion = $bootstrapVersionMatches[0].Groups[1].Value
+$bootstrapCapabilities = $bootstrapCapabilitiesMatches[0].Groups[1].Value
+$requiredBootstrapCapabilities = "checkpoints=$bootstrapCapabilities"
 
 if ([string]::IsNullOrWhiteSpace($Vps14Address)) {
     throw 'Vps14Address is required in -Check, -PrepareBootstrap or -Apply mode'
@@ -1343,7 +1350,7 @@ try {
         $stageCommand = ConvertTo-LinuxLf -Name 'bootstrap staging command' -Content $stageCommand
         Invoke-Native $script:Ssh ($keyOnlySshOptions + @($target, $stageCommand))
 
-        $temporaryFiles = New-RemoteBootstrapFiles -Username $UbuntuUsername -BootstrapSource $bootstrapSource
+        $temporaryFiles = New-RemoteBootstrapFiles -Username $UbuntuUsername -BootstrapContent $bootstrapContractSource
         $wrapperPath = $temporaryFiles[1]
         $sudoersPath = $temporaryFiles[2]
         $bootstrapCopyPath = $temporaryFiles[3]
@@ -1415,7 +1422,8 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 13\ncheckpoints=1,2,3')"
+expected_protocol="$(printf 'powerseven-bootstrap %s\ncheckpoints=%s' '__BOOTSTRAP_VERSION__' '__BOOTSTRAP_CAPABILITIES__')"
+test "$(sudo "$wrapper" --protocol)" = "$expected_protocol"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1429,7 +1437,7 @@ fi
 trap - ERR
 sudo rm -rf "$backup" "$stage"
 '@
-        $installCommand = $installCommand.Replace('__STAGE__', $remoteStageDir).Replace('__BACKUP__', $remoteBackupDir)
+        $installCommand = $installCommand.Replace('__STAGE__', $remoteStageDir).Replace('__BACKUP__', $remoteBackupDir).Replace('__BOOTSTRAP_VERSION__', $requiredBootstrapVersion).Replace('__BOOTSTRAP_CAPABILITIES__', $bootstrapCapabilities)
         $installCommand = ConvertTo-LinuxLf -Name 'privileged bootstrap transaction' -Content $installCommand
         $transactionPath = Join-Path $temporaryFiles[0] 'powerseven-install-transaction.sh'
         [System.IO.File]::WriteAllText($transactionPath, $installCommand, [System.Text.UTF8Encoding]::new($false))
