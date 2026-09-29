@@ -187,6 +187,25 @@ def cold_state_fixture(persistent_ready: bool) -> bool:
     return persistent_ready
 
 
+def windows_firewall_range_fixture(values: list[str], family: int) -> bool:
+    try:
+        ranges = []
+        for value in values:
+            start_text, end_text = value.split("-", 1)
+            start, end = ipaddress.ip_address(start_text), ipaddress.ip_address(end_text)
+            if start.version != family or end.version != family or int(start) > int(end):
+                return False
+            for address in (start, end):
+                if address.is_unspecified or address.is_loopback or address.is_multicast:
+                    return False
+                if family == 4 and address == ipaddress.ip_address("255.255.255.255"):
+                    return False
+            ranges.append((int(start), int(end)))
+        return ranges == sorted(ranges) and all(left[1] < right[0] for left, right in zip(ranges, ranges[1:]))
+    except ValueError:
+        return False
+
+
 def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, extra_sessions: int) -> int:
     return protocol_probe_sessions + checkpoint_sessions + extra_sessions
 
@@ -455,14 +474,22 @@ def main() -> int:
         report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
     rdp_match = re.search(r"function Ensure-DC02RdpFirewall \{(?P<body>.*?)(?=\n\}\n\nfunction Test-AdminClientConfig)", runner, re.DOTALL)
     rdp_body = rdp_match.group("body") if rdp_match else ""
-    if (rdp_match and rdp_body.find("New-NetFirewallRule -Name $blockName") < rdp_body.find("New-NetFirewallRule -Name $allowName") and
+    block4 = rdp_body.find("New-NetFirewallRule -Name $blockIPv4Name")
+    block6 = rdp_body.find("New-NetFirewallRule -Name $blockIPv6Name")
+    allow = rdp_body.find("New-NetFirewallRule -Name $allowName")
+    ipv4_block_ranges = ["0.0.0.1-10.98.255.255", "10.99.1.0-255.255.255.254"]
+    ipv6_block_ranges = ["::2-feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"]
+    if (rdp_match and min(block4, block6) >= 0 and max(block4, block6) < allow and
             "Get-NetFirewallProfile -PolicyStore ActiveStore" in rdp_body and
-            "0.0.0.0-10.98.255.255" in runner and "10.99.1.0-255.255.255.255" in runner and "::/0" in runner and
+            all(value in runner for value in ipv4_block_ranges + ipv6_block_ranges) and
+            windows_firewall_range_fixture(ipv4_block_ranges, 4) and windows_firewall_range_fixture(ipv6_block_ranges, 6) and
+            "0.0.0.0-10.98.255.255" not in runner and "10.99.1.0-255.255.255.255" not in runner and "::/0" not in runner and
+            "PowerSeven-AdminVPN-RDP-BlockOutsideIPv4" in runner and "PowerSeven-AdminVPN-RDP-BlockOutsideIPv6" in runner and
             "Get-NetFirewallRule -Name $Name -PolicyStore $store" in runner and
             "Get-EnabledRdpFirewallRules" not in runner and
             "Remove-NetRoute -DestinationPrefix" in runner and
             "Keep any managed RDP block in place on failure" in runner):
-        report("PASS", "cp3-rdp-policy", "managed block precedes allow; active policy and fail-closed rerun are checked")
+        report("PASS", "cp3-rdp-policy", "valid IPv4/IPv6 blocks precede allow; active policy and fail-closed rerun are checked")
     else:
         report("FAIL", "cp3-rdp-policy", "RDP policy may depend on existing rules or leave a broad allow active")
     scp_source = "Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))"

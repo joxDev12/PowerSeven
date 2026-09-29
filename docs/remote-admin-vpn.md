@@ -65,9 +65,11 @@ e `wg-admin.conf` associano `jarvis` a `.2` e `giorgio-laptop` a `.3`.
 I profili già esportati su DC02 vengono riutilizzati senza ruotare le chiavi.
 
 Il runner crea/verifica su DC02 la route verso `10.99.0.0/24`, installa prima
-una regola RDP che blocca TCP/3389 da fuori VPN e poi una regola allow da
-`10.99.0.0/24` verso `192.168.214.13`. Le regole esistenti non vengono
-modificate; il blocco esplicito prevale su eventuali allow più ampi.
+regole RDP distinte per bloccare TCP/3389 da fuori VPN su IPv4 e IPv6, poi
+consente `10.99.0.0/24` verso `192.168.214.13`. Gli intervalli escludono gli
+indirizzi speciali rifiutati da Windows Defender Firewall. Le regole esistenti
+non vengono modificate; i blocchi espliciti prevalgono su eventuali allow più
+ampi.
 I profili vengono salvati senza password in:
 
 ```text

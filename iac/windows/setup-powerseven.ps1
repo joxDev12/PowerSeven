@@ -800,8 +800,10 @@ function Test-ManagedRdpRule {
 function Test-DC02RdpFirewall {
     $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop)
     if ($profiles.Count -ne 3 -or @($profiles | Where-Object { $_.Enabled -ne 'True' }).Count -gt 0) { return $false }
-    $outside = @('0.0.0.0-10.98.255.255', '10.99.1.0-255.255.255.255', '::/0')
-    return ((Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-BlockOutside' -Action Block -RemoteAddress $outside -LocalAddress Any) -and
+    $outsideIPv4 = @('0.0.0.1-10.98.255.255', '10.99.1.0-255.255.255.254')
+    $outsideIPv6 = @('::2-feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')
+    return ((Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-BlockOutsideIPv4' -Action Block -RemoteAddress $outsideIPv4 -LocalAddress Any) -and
+        (Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-BlockOutsideIPv6' -Action Block -RemoteAddress $outsideIPv6 -LocalAddress Any) -and
         (Test-ManagedRdpRule -Name 'PowerSeven-AdminVPN-RDP-Allow' -Action Allow -RemoteAddress @('10.99.0.0/24') -LocalAddress '192.168.214.13'))
 }
 
@@ -810,22 +812,31 @@ function Ensure-DC02RdpFirewall {
     if ($profiles.Count -ne 3 -or @($profiles | Where-Object { $_.Enabled -ne 'True' }).Count -gt 0) {
         throw 'Windows Defender Firewall must be enabled in all active profiles before CP3 can protect RDP'
     }
-    $outside = @('0.0.0.0-10.98.255.255', '10.99.1.0-255.255.255.255', '::/0')
-    $blockName = 'PowerSeven-AdminVPN-RDP-BlockOutside'
+    $outsideIPv4 = @('0.0.0.1-10.98.255.255', '10.99.1.0-255.255.255.254')
+    $outsideIPv6 = @('::2-feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')
+    $blockIPv4Name = 'PowerSeven-AdminVPN-RDP-BlockOutsideIPv4'
+    $blockIPv6Name = 'PowerSeven-AdminVPN-RDP-BlockOutsideIPv6'
     $allowName = 'PowerSeven-AdminVPN-RDP-Allow'
-    $block = @(Get-NetFirewallRule -Name $blockName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
-    if ($block.Count -eq 0) {
-        New-NetFirewallRule -Name $blockName -DisplayName 'PowerSeven RDP block outside admin VPN' -Direction Inbound -Action Block -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -RemoteAddress $outside -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
+    $blockIPv4 = @(Get-NetFirewallRule -Name $blockIPv4Name -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+    if ($blockIPv4.Count -eq 0) {
+        New-NetFirewallRule -Name $blockIPv4Name -DisplayName 'PowerSeven RDP block outside admin VPN IPv4' -Direction Inbound -Action Block -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -RemoteAddress $outsideIPv4 -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
     }
-    if (-not (Test-ManagedRdpRule -Name $blockName -Action Block -RemoteAddress $outside -LocalAddress Any)) {
-        throw 'PowerSeven RDP block rule is missing or differs from the effective policy'
+    if (-not (Test-ManagedRdpRule -Name $blockIPv4Name -Action Block -RemoteAddress $outsideIPv4 -LocalAddress Any)) {
+        throw 'PowerSeven RDP IPv4 block rule is missing or differs from the effective policy'
+    }
+    $blockIPv6 = @(Get-NetFirewallRule -Name $blockIPv6Name -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+    if ($blockIPv6.Count -eq 0) {
+        New-NetFirewallRule -Name $blockIPv6Name -DisplayName 'PowerSeven RDP block outside admin VPN IPv6' -Direction Inbound -Action Block -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -RemoteAddress $outsideIPv6 -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
+    }
+    if (-not (Test-ManagedRdpRule -Name $blockIPv6Name -Action Block -RemoteAddress $outsideIPv6 -LocalAddress Any)) {
+        throw 'PowerSeven RDP IPv6 block rule is missing or differs from the effective policy'
     }
     $allow = @(Get-NetFirewallRule -Name $allowName -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
     if ($allow.Count -eq 0) {
         New-NetFirewallRule -Name $allowName -DisplayName 'PowerSeven RDP allow from admin VPN' -Direction Inbound -Action Allow -Enabled True -Profile Any -Protocol TCP -LocalPort 3389 -LocalAddress '192.168.214.13' -RemoteAddress '10.99.0.0/24' -PolicyStore PersistentStore -ErrorAction Stop | Out-Null
     }
     if (-not (Test-DC02RdpFirewall)) { throw 'PowerSeven RDP allow/block policy is not effective' }
-    Write-Result 'PASS' 'dc02-rdp-firewall' 'managed TCP/3389 block outside VPN and allow from 10.99.0.0/24 are effective'
+    Write-Result 'PASS' 'dc02-rdp-firewall' 'managed IPv4/IPv6 TCP/3389 blocks outside VPN and allow from 10.99.0.0/24 are effective'
 }
 
 function Test-AdminClientConfig {
