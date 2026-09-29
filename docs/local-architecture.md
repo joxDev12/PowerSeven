@@ -33,8 +33,9 @@ Target approvato: usare VMnet8 NAT:
 | VPS13 | `192.168.214.13` |
 | VPS14 | `192.168.214.14` |
 
-Gli IP `.12-.14` sono fuori dal range DHCP osservato. Configurare statici o
-reservation, mai lease casuali. Internet passa dal NAT VMware.
+Gli IP `.12-.14` sono fuori dal range DHCP osservato e sono configurati statici
+su VMnet8; non serve una reservation sul router fisico. Internet passa dal NAT
+VMware.
 
 Prima dell'implementazione verificare che underlay, overlay WireGuard, LAN,
 VMnet e bridge container non abbiano CIDR sovrapposti. Nessuna rete host viene

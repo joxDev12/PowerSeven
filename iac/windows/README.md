@@ -86,7 +86,7 @@ VMnet8 statico `.14` e Bridged DHCP senza default route/DNS. Il passaggio `.145`
 → `.14` usa una sessione SSH con timeout bounded, attende il nuovo endpoint e
 riusa la host identity della sessione DHCP tramite `HostKeyAlias`; il token di
 rete viene confermato automaticamente. Il rollback guard resta attivo fino a
-quella conferma. Nel contract v11 la conferma attende fino a 45 s che DHCP Bridged,
+quella conferma. Nel contract v12 la conferma attende fino a 45 s che DHCP Bridged,
 networkd, route, DNS e Netplan persistente siano pronti; il runner concede
 75 s alla chiamata di conferma.
 CP3 configura `wg-admin` su VPS14, aggiunge su DC02 la route persistente
@@ -97,8 +97,10 @@ in `C:\ProgramData\PowerSeven\clients\`. Le chiavi sono indipendenti;
 resta nel bootstrap Linux VPS14; DC02 esporta i file, mentre ciascun computer
 importa solo il proprio client WireGuard. Codex usa la VPN del computer corrente.
 I file client sono secret locali e non entrano nel repository.
-Prima di CP3 fissare con DHCP reservation l'IP Bridged di VPS14 usato come
-endpoint nei profili. Il runner configura prima la VPN ed esporta i profili,
+La Bridged usa DHCP normale. A ogni Apply CP3 il runner legge l'IP corrente di
+VPS14 e aggiorna `Endpoint` nei profili locali senza cambiare le private key;
+se il lease cambia dopo l'import sui client, ridistribuire i profili aggiornati.
+Il runner configura prima la VPN ed esporta i profili,
 poi aggiunge la route e limita RDP su DC02. `-Check -Checkpoint 3` controlla
 anche route attiva/persistente, regole RDP e due profili distinti.
 

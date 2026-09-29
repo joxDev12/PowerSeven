@@ -7,7 +7,7 @@ CHECK_NEEDS_APPLY=0
 NETWORK_TRANSACTION_ID=''
 CONFIRM_NETWORK_TRANSACTION_ID=''
 CLEANUP_CLIENT=''
-readonly POWERSEVEN_BOOTSTRAP_VERSION='11'
+readonly POWERSEVEN_BOOTSTRAP_VERSION='12'
 readonly POWERSEVEN_BOOTSTRAP_CAPABILITIES='1,2,3'
 readonly MIN_FREE_BYTES=$((1024 * 1024))
 readonly FS_MARGIN_BYTES=$((1024 * 1024 * 1024))
@@ -1337,6 +1337,13 @@ ensure_vpn_packages() {
         apt-get install -y --no-install-recommends wireguard nftables
     fi
 }
+
+if [[ "$#" -eq 1 && "$1" == '--admin-endpoint' ]]; then
+    [[ "$EUID" -eq 0 ]] || { printf '%s\n' 'admin endpoint requires root' >&2; exit 2; }
+    detect_network_interfaces && [[ "$BRIDGED_ADDRESS" != 'none' ]] || exit 1
+    printf '%s:%s\n' "${BRIDGED_ADDRESS%/*}" "$WG_PORT"
+    exit 0
+fi
 
 vpn_checkpoint() {
     local peer peer_name peer_address peer_public

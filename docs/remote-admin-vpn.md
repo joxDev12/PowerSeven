@@ -18,10 +18,11 @@ configurazione normale. La route equivalente per VPS12 arriva più avanti.
 
 1. Confermare la configurazione VMware già validata in CP2: NIC 1 su VMnet8,
    NIC 2 Bridged sulla scheda fisica, “Connected” e “Connect at power on”.
-2. Non modificare MAC/order della NIC VMnet8. Annotare il MAC della Bridged e
-   assegnarle una DHCP reservation sulla LAN fisica prima del primo Apply CP3.
-   I profili client contengono questo IP come endpoint: se cambia, aggiornare
-   `Endpoint` in entrambi i profili senza rigenerare le chiavi.
+2. Non modificare MAC/order della NIC VMnet8. La Bridged usa DHCP normale:
+   il runner legge il suo IP corrente e aggiorna `Endpoint` nei due profili
+   durante ogni Apply CP3, senza rigenerare le chiavi. Se il lease cambia dopo
+   che i profili sono stati importati, rieseguire Apply e ridistribuire i
+   profili aggiornati ai rispettivi computer.
 3. Verificare che la LAN fisica non usi `192.168.214.0/24` e che il Wi-Fi non
    abbia client isolation tra laptop e VM.
 
@@ -62,21 +63,24 @@ C:\ProgramData\PowerSeven\clients\PowerSeven-DC02.rdp
 
 Le private key distinte non vengono stampate o versionate. VPS14 conserva solo
 le public key; dopo ogni SCP validato il runner elimina lo staging del peer.
-Se un peer esiste ma il
-config locale è perso, il rerun fallisce senza rigenerare identità: serve una
+Se un peer esiste ma il config locale è perso, il rerun fallisce senza
+rigenerare identità: serve una
 rotazione esplicita.
 Conservare i due file protetti su DC02 e copiare ciascuno solo sul proprio
 computer. Un rerun riusa le identità; se si interrompe prima della pulizia,
 lo staging residuo permette di recuperare il profilo mancante.
 
-## Primo test LIVE
+## Ripresa del test LIVE
 
-1. Su LAN/router fisico confermare la DHCP reservation della NIC Bridged di
-   VPS14 e annotare IP assegnato. CP2 è già stato validato LIVE dopo reboot;
-   il nuovo runner v11 migrerà il bootstrap Linux durante l'Apply CP3.
+1. Confermare che VPS14 resta raggiungibile su VMnet8 `.14` e che la Bridged
+   ha un lease DHCP. Non è richiesta alcuna configurazione del router. CP2 è
+   già stato validato LIVE dopo reboot; il runner v12 migrerà il bootstrap
+   Linux durante l'Apply CP3.
 2. Su DC02, PowerShell Administrator: `setup-powerseven.ps1 -Apply -Checkpoint 3`
    con `-Vps14Address 192.168.214.14` e lo stesso `-UbuntuUsername` del CP2.
-   Se fallisce, ispezionare l'errore e rieseguire lo stesso Apply dopo la
+   Dopo il precedente errore SCP, questo stesso comando recupera i due file
+   già staged e conserva le identità dei peer. Se fallisce, ispezionare
+   l'errore e rieseguire lo stesso Apply dopo la
    correzione; non cancellare profili, public key o staging per tentare il rerun.
 3. Eseguire `setup-powerseven.ps1 -Check -Checkpoint 3`. Su VPS14 verificare
    `systemctl is-active powerseven-admin-firewall wg-quick@wg-admin`,

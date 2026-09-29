@@ -95,7 +95,7 @@ provisiona VM o host automaticamente.
   vengono salvate. Per CP2 il runner riconnette a `192.168.214.14`; per CP3
   configura route persistente DC02, firewall RDP e recupera il client config
   fuori repository.
-- **Persistenza CP2:** il bootstrap contract corrente è `v11`. Dopo `netplan generate`
+- **Persistenza CP2:** il bootstrap contract corrente è `v12`. Dopo `netplan generate`
   verifica i file networkd MAC-matched, ricarica e riconfigura le due NIC; se
   restano unmanaged esegue un singolo restart protetto di systemd-networkd.
   Lo stato `configured` e il file `.network` attivo sono letti da `networkctl status`.
@@ -222,7 +222,11 @@ le password non vengono versionate.
   LAN fisica non sovrapposta, secret/key bootstrap già validati.
 - **Risultato atteso:** `wg-admin` `.1`, Jarvis `.2`, giorgio-laptop `.3`, UDP/51820 soltanto sulla
   Bridged, nessun NAT normale, config client in `C:\ProgramData\PowerSeven\clients`.
-- **Stato:** **IMPLEMENTED / NOT YET LIVE VALIDATED** per VPN admin;
+- **Stato:** **PARTIAL LIVE / NOT YET END-TO-END VALIDATED** per VPN admin.
+  Il primo Apply ha installato WireGuard e nftables su VPS14, avviato
+  `wg-admin` e lasciato i due profili client in staging. Il download SCP su
+  DC02 è fallito prima delle modifiche a route e RDP. Il runner v12 corregge
+  l'invocazione SCP e recupera le identità staged nel rerun;
   peer VPS12/VPS13, CA, DNS applicativo e overlay `10.10.10.0/24` restano
   fasi successive.
 

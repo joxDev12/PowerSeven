@@ -132,8 +132,8 @@ def cold_state_fixture(persistent_ready: bool) -> bool:
     return persistent_ready
 
 
-def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, duplicate_auth_sessions: int) -> int:
-    return protocol_probe_sessions + checkpoint_sessions + duplicate_auth_sessions
+def check_ssh_session_count(protocol_probe_sessions: int, checkpoint_sessions: int, endpoint_sessions: int) -> int:
+    return protocol_probe_sessions + checkpoint_sessions + endpoint_sessions
 
 
 def protocol_probe_fixture(exit_code: int, stderr: str, output: str, version: str, capabilities: str, checkpoint: str) -> tuple[bool, bool]:
@@ -385,11 +385,24 @@ def main() -> int:
             "-RouteMetric 50 -ErrorAction Stop" in runner and
             "-PolicyStore $store" in runner and
             "function Test-DC02AdminState" in runner and
-            "if ($Checkpoint -eq '3' -and -not (Test-DC02AdminState))" in runner and
+            "Test-DC02AdminState -Endpoint $endpoint" in runner and
             "Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow" in runner):
         report("PASS", "cp3-runner-order", "VPN and profiles precede DC02 changes; Check covers both route stores and RDP scope")
     else:
         report("FAIL", "cp3-runner-order", "DC02 changes can precede VPN readiness or local CP3 checks are incomplete")
+    scp_source = "Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))"
+    if (scp_source in cp3_runner and
+            "$remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name" in cp3_runner and
+            'Invoke-Native $script:Scp ($keyOnlySshOptions + @($target +' not in cp3_runner and
+            cp3_runner.find("Get-RemoteAdminEndpoint") < cp3_runner.find("Update-AdminClientEndpoint") < cp3_runner.find("--cleanup-client") and
+            "[System.IO.File]::Replace($temporaryPath, $Path, $null)" in runner and
+            '$content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint")' in runner and
+            0 <= bootstrap.find("detect_network_interfaces()") < bootstrap.find("if [[ \"$#\" -eq 1 && \"$1\" == '--admin-endpoint' ]]") and
+            "detect_network_interfaces && [[ \"$BRIDGED_ADDRESS\" != 'none' ]]" in bootstrap and
+            "Test-AdminClientConfig -Path $path -Address $peer.Address -Endpoint $Endpoint" in runner):
+        report("PASS", "cp3-export-recovery", "SCP gets two paths; staged keys survive failure and reruns atomically refresh only the endpoint")
+    else:
+        report("FAIL", "cp3-export-recovery", "SCP arguments, staged-key recovery or dynamic endpoint sync is incomplete")
     cp2_runner_match = re.search(r"if \(\$Checkpoint -eq '2' -and \$Apply\) \{(?P<body>.*?)(?=\n    \} elseif \(\$Checkpoint -eq '3' -and \$Apply\))", runner, re.DOTALL)
     cp2_runner_body = cp2_runner_match.group("body") if cp2_runner_match else ""
     if (cp2_runner_match and
@@ -414,7 +427,7 @@ def main() -> int:
         report("PASS", "windows-cp2-fixtures", "already-ready, pending old session, host-key mismatch and bounded timeout cases are covered")
     else:
         report("FAIL", "windows-cp2-fixtures", "CP2 runner transition fixture coverage failed")
-    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
+    if wrapper_match and all(token in wrapper_match.group("body") for token in ("--version", "--capabilities", "--protocol", "--peer-status", "--admin-endpoint", "--network-token", "--confirm-network", "--cleanup-client", "exec /usr/local/lib/powerseven/bootstrap.sh \"$@\"")):
         report("PASS", "wrapper-allowlist", "extended CP2/CP3 arguments are explicitly allowlisted")
     else:
         report("FAIL", "wrapper-allowlist", "wrapper allowlist does not cover the approved transactions")
@@ -424,11 +437,11 @@ def main() -> int:
         report("PASS", "network-retry-call", "post-apply retry starts from the pre-apply NIC references without a detection short-circuit")
     else:
         report("FAIL", "network-retry-call", "post-apply retry is still gated by immediate NIC rediscovery")
-    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='11'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
+    if all(token in bootstrap for token in ("readonly POWERSEVEN_BOOTSTRAP_VERSION='12'", "POWERSEVEN_BOOTSTRAP_CAPABILITIES", "--protocol", "checkpoints=%s\\n")):
         report("PASS", "bootstrap-protocol", "version and capabilities use one deterministic read-only protocol command")
     else:
         report("FAIL", "bootstrap-protocol", "bootstrap version/capabilities protocol is incomplete")
-    if all(token in runner for token in ("$requiredBootstrapVersion = '11'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
+    if all(token in runner for token in ("$requiredBootstrapVersion = '12'", "$requiredBootstrapCapabilities = 'checkpoints=1,2,3'", "Test-BootstrapProtocol", "ProtocolSupported", "automatic migration starting", "PrepareBootstrap")):
         report("PASS", "bootstrap-migration", "runner gates migration and preparation on the version/capability protocol")
     else:
         report("FAIL", "bootstrap-migration", "runner migration/preparation gate is incomplete")
@@ -448,15 +461,17 @@ def main() -> int:
             "Test-ExistingBootstrapInstallation" in check_flow and
             not re.search(r"\bTest-SshKeyAuthentication\b", check_flow) and
             check_flow.count("Invoke-NativeReadOnly") == 1 and
-            check_ssh_session_count(1, 1, 0) == 2):
-        report("PASS", "check-ssh-session-budget", "normal Check uses one protocol/auth SSH session plus one checkpoint session")
+            "Get-RemoteAdminEndpoint -Target $target" in check_flow and
+            check_ssh_session_count(1, 1, 0) == 2 and
+            check_ssh_session_count(1, 1, 1) == 3):
+        report("PASS", "check-ssh-session-budget", "Check uses two SSH sessions; CP3 adds one read-only endpoint probe")
     else:
         report("FAIL", "check-ssh-session-budget", "Check path has redundant SSH probes or exceeds two normal sessions")
     protocol_fixtures = (
-        (protocol_probe_fixture(0, "", "powerseven-bootstrap 11\ncheckpoints=1,2,3\n", "11", "checkpoints=1,2,3", "2"), (True, True)),
-        (protocol_probe_fixture(2, "usage: old wrapper", "", "11", "checkpoints=1,2,3", "2"), (True, False)),
-        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "11", "checkpoints=1,2,3", "2"), (False, False)),
-        (protocol_probe_fixture(255, "Host key verification failed", "", "11", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(0, "", "powerseven-bootstrap 12\ncheckpoints=1,2,3\n", "12", "checkpoints=1,2,3", "2"), (True, True)),
+        (protocol_probe_fixture(2, "usage: old wrapper", "", "12", "checkpoints=1,2,3", "2"), (True, False)),
+        (protocol_probe_fixture(255, "Permission denied (publickey)", "", "12", "checkpoints=1,2,3", "2"), (False, False)),
+        (protocol_probe_fixture(255, "Host key verification failed", "", "12", "checkpoints=1,2,3", "2"), (False, False)),
     )
     if all(actual == expected for actual, expected in protocol_fixtures):
         report("PASS", "protocol-probe-fixtures", "valid, obsolete, authentication-failed and host-key-mismatch probes are distinguished")

@@ -11,7 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$requiredBootstrapVersion = '11'
+$requiredBootstrapVersion = '12'
 $requiredBootstrapCapabilities = 'checkpoints=1,2,3'
 
 function Write-Result {
@@ -642,7 +642,7 @@ function New-RemoteBootstrapFiles {
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' || "$1" == '--protocol' || "$1" == '--peer-status' ) ]]; then
+if [[ "$#" -eq 1 && ( "$1" == '--version' || "$1" == '--capabilities' || "$1" == '--protocol' || "$1" == '--peer-status' || "$1" == '--admin-endpoint' ) ]]; then
     exec /usr/local/lib/powerseven/bootstrap.sh "$@"
 fi
 
@@ -836,7 +836,7 @@ function Restore-DC02RdpFirewall {
 }
 
 function Test-AdminClientConfig {
-    param([string]$Path, [string]$Address)
+    param([string]$Path, [string]$Address, [string]$Endpoint = '')
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
     $content = Get-Content -LiteralPath $Path -Raw
     $allowed = [regex]::Matches($content, '(?m)^AllowedIPs = (.+)$')
@@ -845,10 +845,41 @@ function Test-AdminClientConfig {
         [regex]::Matches($content, '(?m)^\[Peer\]$').Count -eq 1 -and
         $allowed.Count -eq 1 -and $allowed[0].Groups[1].Value -ceq '192.168.214.0/24' -and
         $content -match '(?m)^Endpoint = \S+:51820$' -and
+        ($Endpoint -eq '' -or $content -match ("(?m)^Endpoint = {0}$" -f [regex]::Escape($Endpoint))) -and
         $content -match '(?m)^PrivateKey = \S+$')
 }
 
+function Get-RemoteAdminEndpoint {
+    param([string]$Target, [string[]]$SshOptions)
+    $result = Invoke-NativeCapture $script:Ssh ($SshOptions + @($Target, 'sudo', '-n', '/usr/local/sbin/powerseven-bootstrap', '--admin-endpoint'))
+    $endpoint = $result.StandardOutput.Trim()
+    if ($result.ExitCode -ne 0 -or $endpoint -notmatch '^(?:[0-9]{1,3}\.){3}[0-9]{1,3}:51820$') {
+        throw 'Could not determine the current VPS14 bridged VPN endpoint'
+    }
+    return $endpoint
+}
+
+function Update-AdminClientEndpoint {
+    param([string]$Path, [string]$Endpoint)
+    $content = Get-Content -LiteralPath $Path -Raw
+    $endpointMatches = [regex]::Matches($content, '(?m)^Endpoint = \S+:51820$')
+    if ($endpointMatches.Count -ne 1) { throw "Client profile has an invalid endpoint line: $Path" }
+    if ($endpointMatches[0].Value -ceq "Endpoint = $Endpoint") { return }
+    $temporaryPath = Join-Path (Split-Path -Parent $Path) ('.powerseven-endpoint-' + [guid]::NewGuid().ToString('N'))
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, $content.Replace($endpointMatches[0].Value, "Endpoint = $Endpoint"), [System.Text.UTF8Encoding]::new($false))
+        Set-RestrictedAcl -Path $temporaryPath -Directory $false
+        [System.IO.File]::Replace($temporaryPath, $Path, $null)
+        Set-RestrictedAcl -Path $Path -Directory $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) { Remove-Item -LiteralPath $temporaryPath -Force }
+    }
+    Write-Result 'PASS' 'admin-client-endpoint' "updated $(Split-Path -Leaf $Path) to $Endpoint without changing its private key"
+}
+
 function Test-DC02AdminState {
+    param([string]$Endpoint)
     $ready = $true
     $underlay = Get-DC02UnderlayInterface
     foreach ($store in @('ActiveStore', 'PersistentStore')) {
@@ -875,7 +906,7 @@ function Test-DC02AdminState {
     $clientKeys = @()
     foreach ($peer in @(@{ Name = 'jarvis'; Address = '10.99.0.2/32' }, @{ Name = 'giorgio-laptop'; Address = '10.99.0.3/32' })) {
         $path = Join-Path $clientDirectory ("powerseven-admin-{0}.conf" -f $peer.Name)
-        if (-not (Test-AdminClientConfig -Path $path -Address $peer.Address)) {
+        if (-not (Test-AdminClientConfig -Path $path -Address $peer.Address -Endpoint $Endpoint)) {
             Write-Result 'MISSING' 'admin-client' "$($peer.Name) profile is missing or invalid at $path"
             $ready = $false
         } else {
@@ -1017,7 +1048,10 @@ if ($Check) {
     $remoteCheck = Invoke-NativeReadOnly $script:Ssh ($keyOnlySshOptions + @($target) + $remoteCheckArguments)
     if ($remoteCheck.ExitCode -eq 0 -and -not $remoteCheck.HasRemediation) {
         Write-Result 'PASS' 'powerseven-bootstrap' "--check --checkpoint $Checkpoint completed"
-        if ($Checkpoint -eq '3' -and -not (Test-DC02AdminState)) { exit 10 }
+        if ($Checkpoint -eq '3') {
+            $endpoint = Get-RemoteAdminEndpoint -Target $target -SshOptions $keyOnlySshOptions
+            if (-not (Test-DC02AdminState -Endpoint $endpoint)) { exit 10 }
+        }
         exit 0
     }
     if ($remoteCheck.HasRemediation) {
@@ -1233,7 +1267,7 @@ sudo install -o root -g root -m 0755 "$stage/bootstrap.sh" "$bootstrap"
 sudo install -o root -g root -m 0755 "$stage/powerseven-bootstrap-wrapper" "$wrapper"
 sudo install -o root -g root -m 0440 "$stage/powerseven-bootstrap.sudoers" "$sudoers"
 sudo visudo -cf "$sudoers"
-test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 11\ncheckpoints=1,2,3')"
+test "$(sudo "$wrapper" --protocol)" = "$(printf 'powerseven-bootstrap 12\ncheckpoints=1,2,3')"
 test "$(sudo stat -c "%U:%G:%a" "$bootstrap")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$wrapper")" = "root:root:755"
 test "$(sudo stat -c "%U:%G:%a" "$sudoers")" = "root:root:440"
@@ -1411,7 +1445,8 @@ sudo rm -rf "$backup" "$stage"
             if (-not $peer.LocalExists) {
                 $temporaryClientPath = Join-Path $clientDirectory ('.powerseven-admin-' + $peer.Name + '.' + [guid]::NewGuid().ToString('N'))
                 try {
-                    Invoke-Native $script:Scp ($keyOnlySshOptions + @($target + ":/tmp/powerseven-admin-$($peer.Name).conf", $temporaryClientPath))
+                    $remoteClientPath = '{0}:/tmp/powerseven-admin-{1}.conf' -f $target, $peer.Name
+                    Invoke-Native $script:Scp ($keyOnlySshOptions + @($remoteClientPath, $temporaryClientPath))
                     Set-RestrictedAcl -Path $temporaryClientPath -Directory $false
                     if (-not (Test-AdminClientConfig -Path $temporaryClientPath -Address $peer.Address)) {
                         throw "downloaded $($peer.Name) config failed structural validation"
@@ -1423,6 +1458,13 @@ sudo rm -rf "$backup" "$stage"
                 Write-Result 'PASS' 'admin-client' "$($peer.Name) config exported to $($peer.Path)"
             } else {
                 Write-Result 'PASS' 'admin-client' "$($peer.Name) identity/config reused"
+            }
+        }
+        $endpoint = Get-RemoteAdminEndpoint -Target $target -SshOptions $keyOnlySshOptions
+        foreach ($peer in $adminPeers) {
+            Update-AdminClientEndpoint -Path $peer.Path -Endpoint $endpoint
+            if (-not (Test-AdminClientConfig -Path $peer.Path -Address $peer.Address -Endpoint $endpoint)) {
+                throw "$($peer.Name) config does not match the current VPS14 endpoint"
             }
         }
         $privateKeys = @($adminPeers | ForEach-Object {
@@ -1438,7 +1480,7 @@ sudo rm -rf "$backup" "$stage"
         Write-Result 'PASS' 'dc02-rdp' "RDP profile created at $rdpPath without credentials"
         $localRouteState = Ensure-DC02AdminRoute
         $localFirewallState = Ensure-DC02RdpFirewall
-        if (-not (Test-DC02AdminState)) { throw 'DC02 administrative VPN state failed final validation' }
+        if (-not (Test-DC02AdminState -Endpoint $endpoint)) { throw 'DC02 administrative VPN state failed final validation' }
         Write-Result 'PASS' 'admin-vpn' 'WireGuard administrative VPN checkpoint completed'
     } else {
         $remoteCheckpointArguments = @(New-RemoteCheckpointArguments -Action $action -Checkpoint $Checkpoint)
